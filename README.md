@@ -12,10 +12,10 @@ Simple Fastify backend with TypeScript + Prisma + PostgreSQL.
 
 ## Fully Explained - Every component of Backend structure
 
-<pre> ```
-bubble-backend/
-├── .env.example
-├── .gitignore
+<pre> 
+bubble-backend/          
+├── .env.example       //template for environment variables (PORT, DATABASE_URL, DB_HOST, DB_USER, etc) - b/c it is example, all fields are placeholders to show checklist of what app needs. Eventually every team member needs to make their own .env with real secrets
+├── .gitignore         //
 ├── package-lock.json
 ├── package.json
 ├── README.md
@@ -27,7 +27,13 @@ bubble-backend/
     ├── index.ts
     └── routes/
         └── health.ts 
-``` </pre>
+</pre>
+
+
+
+
+
+
 ## Project Structure
 
 ```txt
