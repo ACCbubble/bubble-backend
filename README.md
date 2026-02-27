@@ -14,19 +14,19 @@ Simple Fastify backend with TypeScript + Prisma + PostgreSQL.
 
 <pre> 
 bubble-backend/          
-├── .env.example       //template for environment variables (PORT, DATABASE_URL, DB_HOST, DB_USER, etc) - b/c it is example, all fields are placeholders to show checklist of what app needs. Eventually every team member needs to make their own .env with real secrets
-├── .gitignore         //
-├── package-lock.json
-├── package.json
-├── README.md
-├── tsconfig.json
-├── node_modules/
-├── prisma/
-│   └── schema.prisma
-└── src/
-    ├── index.ts
-    └── routes/
-        └── health.ts 
+├── .env.example       // template for environment variables (PORT, DATABASE_URL, DB_HOST, DB_USER, etc) - b/c it is example, all fields are placeholders to show checklist of what app needs. Eventually every team member needs to make their own .env with real secrets
+├── .gitignore         // tells Git what files/folders to ignore such as (node_modules) - these files are not shared on GitHub b/c they are too large or secret
+├── package.json       // lists out (dependencies, scripts, metadata) the backend uses
+├── package-lock.json  // exact versions of dependencies (ex: 13.0.2)
+├── README.md          
+├── tsconfig.json      // typescript configuration - tells typescript how to compile code correctly
+├── node_modules/      // all installed libraries (HUGE - contains tons of pre-made tools, all of them were auto-installed) not on github b/c this only shows on your pc after you use npm to download modules
+├── prisma/            // prisma talks to DB and handles fetching/updating data 
+│   └── schema.prisma  // describes relationships, tables, fields, etc within database
+└── src/               // ALL actual backend code is here. In future, additional folders (services, controllers, helpers, etc) will be inside src 
+    ├── index.ts       // entry point of backend (1st file that runs when you start the backend server). Purpose: starts fastify registers routes, listens on a port. (Ties everything together)
+    └── routes/        // every file inside routes defines HTTP Endpoints. In future, we want auth.ts, messages.ts, polls.ts, etc.
+        └── health.ts  // defines /health route. Purpose: checks if backend is running. 
 </pre>
 
 
