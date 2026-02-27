@@ -12,22 +12,7 @@ Simple Fastify backend with TypeScript + Prisma + PostgreSQL.
 
 ## Fully Explained - Every component of Backend structure
 
-bubble-backend/
-├── .env.example
-├── .gitignore
-├── package-lock.json
-├── package.json
-├── README.md
-├── tsconfig.json
-├── node_modules/
-│   └── ... (a bunch of modules)
-├── prisma/
-│   └── schema.prisma
-└── src/
-    ├── index.ts
-    └── routes/
-        └── health.ts
-
+<pre> ```text bubble-backend/ ├── .env.example ├── .gitignore ├── package-lock.json ├── package.json ├── README.md ├── tsconfig.json ├── node_modules/ │ └── ... (a bunch of modules) ├── prisma/ │ └── schema.prisma └── src/ ├── index.ts └── routes/ └── health.ts ``` </pre>
 ## Project Structure
 
 ```txt
