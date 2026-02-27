@@ -10,6 +10,23 @@ Simple Fastify backend with TypeScript + Prisma + PostgreSQL.
 - `@fastify/helmet`
 - Prisma ORM + PostgreSQL
 
+## Fully Explained - Every component of Backend structure
+
+bubble-backend/
+├── .env.example
+├── .gitignore
+├── package-lock.json
+├── package.json
+├── README.md
+├── tsconfig.json
+├── node_modules/
+├── prisma/
+│   └── schema.prisma
+└── src/
+    ├── index.ts
+    └── routes/
+        └── health.ts
+
 ## Project Structure
 
 ```txt
