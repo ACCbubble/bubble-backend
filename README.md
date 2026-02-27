@@ -1,6 +1,6 @@
 # bubble-backend
 
-Minimal Fastify backend with TypeScript + Prisma + PostgreSQL.
+Simple Fastify backend with TypeScript + Prisma + PostgreSQL.
 
 ## Stack
 
