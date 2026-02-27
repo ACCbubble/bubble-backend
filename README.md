@@ -20,6 +20,7 @@ bubble-backend/
 ├── README.md
 ├── tsconfig.json
 ├── node_modules/
+│   └── ... (a bunch of modules)
 ├── prisma/
 │   └── schema.prisma
 └── src/
