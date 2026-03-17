@@ -8,8 +8,55 @@ datasource db {
 }
 
 model User {
-  id Int             @id @default(autoincrement())
-  username String
-  email String       @unique
-  createdAt DateTime @default(now())
+  id           Int           @id @default(autoincrement())
+  phone        String        @unique @db.VarChar(20)
+  name         String        @db.VarChar(30)
+  passwordHash String        @map("password_hash")
+  createdAt    DateTime?     @map("created_at") @db.Timestamptz(6)
+
+  createdGroups Group[]      @relation("GroupCreator")
+  groupMembers  GroupMember[]
+  messages      Message[]    @relation("MessageSender")
+
+  @@map("users")
+}
+
+model Group {
+  id          Int           @id @default(autoincrement())
+  creatorId   Int           @map("creator_id")
+  createdAt   DateTime      @map("created_at") @db.Timestamptz(6)
+  name        String?       @db.VarChar(255)
+
+  creator     User          @relation("GroupCreator", fields: [creatorId], references: [id])
+  groupMembers GroupMember[]
+  messages    Message[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  id        Int       @id @default(autoincrement())
+  userId    Int       @map("user_id")
+  groupId   Int       @map("group_id")
+  joinedAt  DateTime? @map("joined_at") @db.Timestamptz(6)
+  role      String?   @db.VarChar(30)
+
+  user      User      @relation(fields: [userId], references: [id])
+  group     Group     @relation(fields: [groupId], references: [id])
+
+  @@unique([userId, groupId])
+  @@map("group_members")
+}
+
+model Message {
+  id        Int      @id @default(autoincrement())
+  groupId   Int      @map("group_id")
+  senderId  Int      @map("sender_id")
+  content   String
+  createdAt DateTime @map("created_at") @db.Timestamptz(6)
+
+  group     Group    @relation(fields: [groupId], references: [id])
+  sender    User     @relation("MessageSender", fields: [senderId], references: [id])
+
+  @@map("messages")
 }
