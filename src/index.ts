@@ -1,7 +1,9 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
+
 import { healthRoutes } from "./routes/health.js";
+import { userRoutes } from "./routes/users.js";
 
 const app = Fastify({ logger: true });
 
@@ -10,6 +12,7 @@ await app.register(cors, {
 });
 await app.register(helmet);
 await app.register(healthRoutes);
+await app.register(userRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
