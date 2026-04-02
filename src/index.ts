@@ -14,8 +14,18 @@ import { messageRoutes } from "./routes/messages.js";
 
 const app = Fastify({ logger: true });
 
+const allowedOrigins = (process.env.CORS_ORIGINS ?? "http://localhost:5173")
+  .split(",")
+  .map((o) => o.trim());
+
 await app.register(cors, {
-  origin: "http://localhost:5173",
+  origin: (origin, cb) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      cb(null, true);
+    } else {
+      cb(new Error("Not allowed by CORS"), false);
+    }
+  },
   credentials: true,
   methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
 });
