@@ -9,15 +9,15 @@ datasource db {
 
 model User {
   id           Int           @id @default(autoincrement())
-  phone        String        @unique @db.VarChar(20)
-  name         String        @db.VarChar(30)
+  phone        String        @unique
+  name         String
   passwordHash String        @map("password_hash")
-  createdAt    DateTime?     @map("created_at") @db.Timestamptz(6) @default(now())
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  createdGroups Group[]      @relation("GroupCreator")
-  groupMembers  GroupMember[]
-  messages      Message[]    @relation("MessageSender")
-  refreshTokens RefreshToken[]
+  createdGroups  Group[]        @relation("GroupCreator")
+  groupMembers   GroupMember[]
+  messages       Message[]      @relation("MessageSender")
+  refreshTokens  RefreshToken[]
 
   @@map("users")
 }
@@ -25,8 +25,8 @@ model User {
 model Group {
   id          Int           @id @default(autoincrement())
   creatorId   Int           @map("creator_id")
-  createdAt   DateTime      @map("created_at") @db.Timestamptz(6) @default(now())
-  name        String?       @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  name        String?
 
   creator     User          @relation("GroupCreator", fields: [creatorId], references: [id])
   groupMembers GroupMember[]
@@ -39,8 +39,8 @@ model GroupMember {
   id        Int       @id @default(autoincrement())
   userId    Int       @map("user_id")
   groupId   Int       @map("group_id")
-  joinedAt  DateTime? @map("joined_at") @db.Timestamptz(6)
-  role      String?   @db.VarChar(30)
+  joinedAt DateTime? @map("joined_at") @db.Timestamptz(6)
+  role      String?
 
   user      User      @relation(fields: [userId], references: [id])
   group     Group     @relation(fields: [groupId], references: [id])
