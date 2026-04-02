@@ -4,7 +4,7 @@ CREATE TABLE "users" (
     "phone" TEXT NOT NULL,
     "name" TEXT NOT NULL,
     "password_hash" TEXT NOT NULL,
-    "created_at" TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP,
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
 );
@@ -13,7 +13,7 @@ CREATE TABLE "users" (
 CREATE TABLE "groups" (
     "id" SERIAL NOT NULL,
     "creator_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "name" TEXT,
 
     CONSTRAINT "groups_pkey" PRIMARY KEY ("id")
@@ -24,7 +24,7 @@ CREATE TABLE "group_members" (
     "id" SERIAL NOT NULL,
     "user_id" INTEGER NOT NULL,
     "group_id" INTEGER NOT NULL,
-    "joined_at" TIMESTAMP(3),
+    "joined_at" TIMESTAMPTZ(6),
     "role" TEXT,
 
     CONSTRAINT "group_members_pkey" PRIMARY KEY ("id")
@@ -36,7 +36,8 @@ CREATE TABLE "messages" (
     "group_id" INTEGER NOT NULL,
     "sender_id" INTEGER NOT NULL,
     "content" TEXT NOT NULL,
-    "created_at" TIMESTAMP(3) NOT NULL,
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "read" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "messages_pkey" PRIMARY KEY ("id")
 );
@@ -46,8 +47,8 @@ CREATE TABLE "refresh_tokens" (
     "id" SERIAL NOT NULL,
     "user_id" INTEGER NOT NULL,
     "token_hash" TEXT NOT NULL,
-    "expires_at" TIMESTAMP(3) NOT NULL,
-    "revoked_at" TIMESTAMP(3),
+    "expires_at" TIMESTAMPTZ(6) NOT NULL,
+    "revoked_at" TIMESTAMPTZ(6),
 
     CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
 );

@@ -10,6 +10,7 @@ import { groupRoutes } from "./routes/groups.js";
 import { groupMemberRoutes } from "./routes/groupMembers.js";
 import { authRoutes } from "./routes/auth.js";
 import { isRevoked } from "./lib/tokenRevocation.js";
+import { messageRoutes } from "./routes/messages.js";
 
 const app = Fastify({ logger: true });
 
@@ -34,6 +35,7 @@ await app.register(jwt, {
   secret: process.env.JWT_SECRET ?? "dev-secret-change-in-production",
   cookie: { cookieName: "access_token", signed: false },
 });
+await app.register(messageRoutes);
 
 // Reusable preHandler — attach to any route that requires a logged-in user.
 // Sets request.user = { userId, name } on success.
