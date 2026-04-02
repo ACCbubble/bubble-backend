@@ -2,6 +2,33 @@
 
 Fastify + TypeScript + Prisma + PostgreSQL backend for Bubble.
 
+## Quick Start (Local Development)
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Set up environment
+cp .env.example .env
+# Edit .env — set DATABASE_URL to your PostgreSQL connection string
+
+# 3. Run database migrations and generate Prisma client
+npx prisma migrate dev
+# If you get a "drift detected" error (tables already exist but don't match
+# migration history), reset the database:
+#   npx prisma migrate reset
+# This drops all tables and re-runs migrations from scratch. Safe for local dev.
+
+# 4. Start the dev server (hot reload, listens on :3000)
+npm run dev
+```
+
+**Common issue:** If you get `Cannot read properties of undefined (reading 'create')` on any Prisma model, it means the Prisma client is out of date. Run:
+```bash
+npx prisma generate
+```
+This regenerates the typed client from the current schema. `npm install` alone does NOT do this — you must run `prisma generate` (or `prisma migrate dev`, which runs it automatically) after every fresh clone or schema change.
+
 ## Stack
 
 - **Node.js + TypeScript** (strict, ES2022, NodeNext)
