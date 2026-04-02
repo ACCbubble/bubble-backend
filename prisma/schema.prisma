@@ -24,10 +24,13 @@ model User {
 }
 
 model Group {
-  id        Int      @id @default(autoincrement())
-  creatorId Int      @map("creator_id")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  name      String?
+  id          Int       @id @default(autoincrement())
+  creatorId   Int       @map("creator_id")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  name        String?
+  location    String?
+  eventTime   DateTime? @map("event_time") @db.Timestamptz(6)
+  description String?
 
   creator      User          @relation("GroupCreator", fields: [creatorId], references: [id])
   groupMembers GroupMember[]
