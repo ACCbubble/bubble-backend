@@ -7,59 +7,57 @@ export async function addUserToGroup(
   role: string = "owner"
 ) {
   return await prisma.groupMember.create({
-    data: {
-      userId,
-      groupId,
-      role,
-    },
+    data: { userId, groupId, role },
   });
 }
 
-
 export async function groupMemberRoutes(app: FastifyInstance) {
-  app.get("/groupMembers", async () => {
-    const memberships = await prisma.groupMember.findMany({
-        include: {
-        user: true,
-        group: true,
-        },
-    });
-
-    return memberships;
-    });
-
-
-
-
-  app.post("/groups/:id/members", async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
-    const { userId, role } = request.body as {
-      userId: number;
-      role?: string;
-    };
-
-    try {
-      const membership = await addUserToGroup(userId, groupId, role ?? "member");
-      return membership;
-    } catch (error) {
-      reply.status(400).send({ error: "Adding member failed" });
-    }
-  });
-
-  app.get("/groups/:id/members", async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
-
-    try {
-      const members = await prisma.groupMember.findMany({
-        where: { groupId },
-        include: {
-          user: true,
-        },
+  // GET /groupMembers — protected
+  app.get(
+    "/groupMembers",
+    { preHandler: [app.authenticate] },
+    async () => {
+      return prisma.groupMember.findMany({
+        include: { user: true, group: true },
       });
-
-      return members;
-    } catch (error) {
-      reply.status(400).send({ error: "Fetching members failed" });
     }
-  });
+  );
+
+  // POST /groups/:id/members — protected
+  app.post(
+    "/groups/:id/members",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const groupId = Number((request.params as { id: string }).id);
+      const { userId, role } = request.body as {
+        userId: number;
+        role?: string;
+      };
+
+      try {
+        const membership = await addUserToGroup(userId, groupId, role ?? "member");
+        return membership;
+      } catch {
+        reply.status(400).send({ error: "Adding member failed" });
+      }
+    }
+  );
+
+  // GET /groups/:id/members — protected
+  app.get(
+    "/groups/:id/members",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const groupId = Number((request.params as { id: string }).id);
+
+      try {
+        return prisma.groupMember.findMany({
+          where: { groupId },
+          include: { user: true },
+        });
+      } catch {
+        reply.status(400).send({ error: "Fetching members failed" });
+      }
+    }
+  );
 }
