@@ -12,38 +12,39 @@ model User {
   phone        String        @unique
   name         String
   passwordHash String        @map("password_hash")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
 
   createdGroups  Group[]        @relation("GroupCreator")
   groupMembers   GroupMember[]
   messages       Message[]      @relation("MessageSender")
   refreshTokens  RefreshToken[]
+  userAttributes UserAttribute[]
 
   @@map("users")
 }
 
 model Group {
-  id          Int           @id @default(autoincrement())
-  creatorId   Int           @map("creator_id")
+  id        Int      @id @default(autoincrement())
+  creatorId Int      @map("creator_id")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  name        String?
+  name      String?
 
-  creator     User          @relation("GroupCreator", fields: [creatorId], references: [id])
+  creator      User          @relation("GroupCreator", fields: [creatorId], references: [id])
   groupMembers GroupMember[]
-  messages    Message[]
+  messages     Message[]
 
   @@map("groups")
 }
 
 model GroupMember {
-  id        Int       @id @default(autoincrement())
-  userId    Int       @map("user_id")
-  groupId   Int       @map("group_id")
+  id       Int       @id @default(autoincrement())
+  userId   Int       @map("user_id")
+  groupId  Int       @map("group_id")
   joinedAt DateTime? @map("joined_at") @db.Timestamptz(6)
-  role      String?
+  role     String?
 
-  user      User      @relation(fields: [userId], references: [id])
-  group     Group     @relation(fields: [groupId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+  group Group @relation(fields: [groupId], references: [id])
 
   @@unique([userId, groupId])
   @@map("group_members")
@@ -56,8 +57,9 @@ model Message {
   content   String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  group     Group    @relation(fields: [groupId], references: [id])
-  sender    User     @relation("MessageSender", fields: [senderId], references: [id])
+  group           Group                    @relation(fields: [groupId], references: [id])
+  sender          User                     @relation("MessageSender", fields: [senderId], references: [id])
+  contextEvidence MessageContextEvidence[]
 
   @@map("messages")
 }
@@ -69,7 +71,48 @@ model RefreshToken {
   expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
   revokedAt DateTime? @map("revoked_at") @db.Timestamptz(6)
 
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("refresh_tokens")
+}
+
+model UserAttribute {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  key       String
+  score     Float
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@map("user_attributes")
+}
+
+model EmojiType {
+  id           Int    @id @default(autoincrement())
+  name         String @unique
+  emoji        String
+  description  String
+  defaultScore Float  @default(0.0) @map("default_score")
+
+  evidence MessageContextEvidence[]
+
+  @@map("emoji_types")
+}
+
+model MessageContextEvidence {
+  id           Int      @id @default(autoincrement())
+  messageId    Int      @map("message_id")
+  emojiTypeId  Int?     @map("emoji_type_id")
+  attributeKey String?  @map("attribute_key")
+  direction    String?
+  confidence   Float
+  displayQuote String   @map("display_quote") @db.VarChar(120)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  message   Message    @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  emojiType EmojiType? @relation(fields: [emojiTypeId], references: [id])
+
+  @@map("message_context_evidence")
 }

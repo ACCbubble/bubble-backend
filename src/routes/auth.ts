@@ -3,6 +3,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { prisma } from "../lib/prisma.js";
 import { revokeJti } from "../lib/tokenRevocation.js";
+import { ATTRIBUTE_DEFS } from "../lib/context.js";
 
 const SALT_ROUNDS = 12;
 const ACCESS_TOKEN_TTL = "15m";
@@ -40,6 +41,12 @@ export async function authRoutes(app: FastifyInstance) {
       const user = await prisma.user.create({
         data: { name, phone, passwordHash },
       });
+      // Seed default attribute scores for new user
+      await prisma.userAttribute.createMany({
+        data: ATTRIBUTE_DEFS.map(a => ({ userId: user.id, key: a.key, score: a.defaultScore })),
+        skipDuplicates: true,
+      })
+
       return reply
         .status(201)
         .send({ id: user.id, name: user.name, phone: user.phone });

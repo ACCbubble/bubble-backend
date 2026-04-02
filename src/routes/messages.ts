@@ -1,5 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
+import { processMessageContext } from "../lib/context.js";
+import { contextBus } from "../lib/contextBroadcast.js";
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -16,12 +18,22 @@ export async function messageRoutes(app: FastifyInstance) {
 
     try {
       const message = await prisma.message.create({
-        data: {
-          groupId,
-          senderId,
-          content,
-        },
+        data: { groupId, senderId, content },
+        include: { sender: { select: { id: true, name: true } } },
       });
+
+      // Ensure sender is a group member (idempotent)
+      await prisma.groupMember.upsert({
+        where: { userId_groupId: { userId: senderId, groupId } },
+        update: {},
+        create: { userId: senderId, groupId, role: "member" },
+      });
+
+      // Broadcast new message to group WebSocket clients
+      contextBus.emit('message_created', { groupId, message })
+
+      // Fire context processing async — does not block the response
+      processMessageContext(message.id, message.senderId, message.groupId, message.content).catch(() => {})
 
       return message;
     } catch (error) {
