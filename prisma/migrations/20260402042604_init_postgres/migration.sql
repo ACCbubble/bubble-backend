@@ -1,19 +1,10 @@
-/*
-  Warnings:
-
-  - You are about to drop the `User` table. If the table is not empty, all the data it contains will be lost.
-
-*/
--- DropTable
-DROP TABLE "User";
-
 -- CreateTable
 CREATE TABLE "users" (
     "id" SERIAL NOT NULL,
-    "phone" VARCHAR(20) NOT NULL,
-    "name" VARCHAR(30) NOT NULL,
+    "phone" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
     "password_hash" TEXT NOT NULL,
-    "created_at" TIMESTAMPTZ(6),
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "users_pkey" PRIMARY KEY ("id")
 );
@@ -22,8 +13,8 @@ CREATE TABLE "users" (
 CREATE TABLE "groups" (
     "id" SERIAL NOT NULL,
     "creator_id" INTEGER NOT NULL,
-    "created_at" TIMESTAMPTZ(6) NOT NULL,
-    "name" VARCHAR(255),
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "name" TEXT,
 
     CONSTRAINT "groups_pkey" PRIMARY KEY ("id")
 );
@@ -34,7 +25,7 @@ CREATE TABLE "group_members" (
     "user_id" INTEGER NOT NULL,
     "group_id" INTEGER NOT NULL,
     "joined_at" TIMESTAMPTZ(6),
-    "role" VARCHAR(30),
+    "role" TEXT,
 
     CONSTRAINT "group_members_pkey" PRIMARY KEY ("id")
 );
@@ -45,9 +36,21 @@ CREATE TABLE "messages" (
     "group_id" INTEGER NOT NULL,
     "sender_id" INTEGER NOT NULL,
     "content" TEXT NOT NULL,
-    "created_at" TIMESTAMPTZ(6) NOT NULL,
+    "created_at" TIMESTAMPTZ(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "read" BOOLEAN NOT NULL DEFAULT false,
 
     CONSTRAINT "messages_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "refresh_tokens" (
+    "id" SERIAL NOT NULL,
+    "user_id" INTEGER NOT NULL,
+    "token_hash" TEXT NOT NULL,
+    "expires_at" TIMESTAMPTZ(6) NOT NULL,
+    "revoked_at" TIMESTAMPTZ(6),
+
+    CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateIndex
@@ -70,3 +73,6 @@ ALTER TABLE "messages" ADD CONSTRAINT "messages_group_id_fkey" FOREIGN KEY ("gro
 
 -- AddForeignKey
 ALTER TABLE "messages" ADD CONSTRAINT "messages_sender_id_fkey" FOREIGN KEY ("sender_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;

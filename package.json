@@ -11,9 +11,13 @@
     "prisma:migrate": "prisma migrate dev"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.0.2",
     "@fastify/cors": "^11.1.0",
     "@fastify/helmet": "^13.0.2",
+    "@fastify/jwt": "^10.0.0",
     "@prisma/client": "^6.5.0",
+    "@types/bcrypt": "^6.0.0",
+    "bcrypt": "^6.0.0",
     "fastify": "^5.2.1"
   },
   "devDependencies": {
