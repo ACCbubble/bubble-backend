@@ -43,4 +43,34 @@ export async function groupRoutes(app: FastifyInstance) {
       return group;
     }
   );
+
+  // PATCH /groups/:id — update event details
+  app.patch(
+    "/groups/:id",
+    { preHandler: [app.authenticate] },
+    async (request, reply) => {
+      const id = Number((request.params as { id: string }).id);
+      const { name, location, eventTime, description } = request.body as {
+        name?: string;
+        location?: string;
+        eventTime?: string;
+        description?: string;
+      };
+
+      try {
+        const group = await prisma.group.update({
+          where: { id },
+          data: {
+            ...(name !== undefined && { name }),
+            ...(location !== undefined && { location }),
+            ...(eventTime !== undefined && { eventTime: eventTime ? new Date(eventTime) : null }),
+            ...(description !== undefined && { description }),
+          },
+        });
+        return group;
+      } catch {
+        reply.status(400).send({ error: "Update failed" });
+      }
+    }
+  );
 }
