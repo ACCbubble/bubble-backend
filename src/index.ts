@@ -25,7 +25,6 @@ await app.register(jwt, {
   secret: process.env.JWT_SECRET ?? "dev-secret-change-in-production",
   cookie: { cookieName: "access_token", signed: false },
 });
-await app.register(messageRoutes);
 
 // Reusable preHandler — attach to any route that requires a logged-in user.
 // Sets request.user = { userId, name } on success.
@@ -49,6 +48,7 @@ await app.register(healthRoutes);
 await app.register(userRoutes);
 await app.register(groupRoutes);
 await app.register(groupMemberRoutes);
+await app.register(messageRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";
