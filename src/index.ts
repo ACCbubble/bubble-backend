@@ -16,6 +16,7 @@ import { roundtableRoutes } from "./routes/roundtable.js";
 import { prisma } from "./lib/prisma.js";
 import { EMOJI_TYPE_SEEDS } from "./lib/context.js";
 import { contextBus } from "./lib/contextBroadcast.js";
+import { pollRoutes } from "./routes/polls.js";
 
 const app = Fastify({ logger: true });
 
@@ -63,6 +64,7 @@ await app.register(groupRoutes);
 await app.register(groupMemberRoutes);
 await app.register(messageRoutes);
 await app.register(roundtableRoutes);
+await app.register(pollRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";

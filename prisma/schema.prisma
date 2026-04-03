@@ -8,17 +8,19 @@ datasource db {
 }
 
 model User {
-  id           Int           @id @default(autoincrement())
-  phone        String        @unique
+  id           Int      @id @default(autoincrement())
+  phone        String   @unique
   name         String
-  passwordHash String        @map("password_hash")
-  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  createdGroups  Group[]        @relation("GroupCreator")
+  createdGroups  Group[]         @relation("GroupCreator")
   groupMembers   GroupMember[]
-  messages       Message[]      @relation("MessageSender")
+  messages       Message[]       @relation("MessageSender")
   refreshTokens  RefreshToken[]
   userAttributes UserAttribute[]
+  polls          polls[]
+  votes          votes[]
 
   @@map("users")
 }
@@ -35,6 +37,7 @@ model Group {
   creator      User          @relation("GroupCreator", fields: [creatorId], references: [id])
   groupMembers GroupMember[]
   messages     Message[]
+  polls        polls[]
 
   @@map("groups")
 }
@@ -118,4 +121,38 @@ model MessageContextEvidence {
   emojiType EmojiType? @relation(fields: [emojiTypeId], references: [id])
 
   @@map("message_context_evidence")
+}
+
+model options {
+  id          Int     @id @default(autoincrement())
+  poll_id     Int?
+  option_text String?
+  polls       polls?  @relation(fields: [poll_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  votes       votes[]
+}
+
+model polls {
+  id              Int       @id @default(autoincrement())
+  group_id        Int?
+  user_id         Int?
+  question        String?
+  created_at      DateTime? @db.Timestamptz(6)
+  expires_at      DateTime? @db.Timestamptz(6)
+  is_active       Boolean?
+  allows_multiple Boolean?
+  options         options[]
+  groups          Group?    @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users           User?     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  votes           votes[]
+}
+
+model votes {
+  id         Int       @id @default(autoincrement())
+  user_id    Int?
+  poll_id    Int?
+  option_id  Int?
+  created_at DateTime? @db.Timestamptz(6)
+  options    options?  @relation(fields: [option_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  polls      polls?    @relation(fields: [poll_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users      User?     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
 }
