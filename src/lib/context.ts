@@ -32,10 +32,21 @@ interface EmojiResult {
   quote: string
 }
 
+export interface PollDraft {
+  question: string
+  options: string[]
+  allowsMultiple: boolean
+}
+
 interface ClassificationResult {
   attributes: AttrResult[]
   emojis: EmojiResult[]
   shouldBePoll: boolean
+  pollDraft?: {
+    question?: string
+    options?: string[]
+    allowsMultiple?: boolean
+  }
 }
 
 export async function processMessageContext(
@@ -43,10 +54,10 @@ export async function processMessageContext(
   senderId: number,
   groupId: number,
   content: string,
-) {
+): Promise<PollDraft | null> {
   try {
     const sender = await prisma.user.findUnique({ where: { id: senderId }, select: { name: true } })
-    if (!sender) return
+    if (!sender) return null
 
     const emojiTypes = await prisma.emojiType.findMany()
     const result = await classifyMessage(content, sender.name, emojiTypes)
@@ -86,8 +97,30 @@ export async function processMessageContext(
     }
 
     contextBus.emit('context_updated', { groupId, userId: senderId })
+    return sanitizePollDraft(result)
   } catch (err) {
     console.error('[context] processing failed:', err)
+    return null
+  }
+}
+
+function sanitizePollDraft(result: ClassificationResult): PollDraft | null {
+  if (!result.shouldBePoll) return null
+
+  const rawQuestion = result.pollDraft?.question?.trim()
+  const rawOptions = result.pollDraft?.options
+    ?.map(option => option.trim())
+    .filter((option): option is string => option.length > 0)
+
+  if (!rawQuestion || !rawOptions || rawOptions.length < 2) return null
+
+  const uniqueOptions = [...new Set(rawOptions)].slice(0, 6)
+  if (uniqueOptions.length < 2) return null
+
+  return {
+    question: rawQuestion.slice(0, 200),
+    options: uniqueOptions,
+    allowsMultiple: Boolean(result.pollDraft?.allowsMultiple),
   }
 }
 
@@ -121,8 +154,18 @@ Return JSON in exactly this shape:
 {
   "attributes": [{ "key": string, "signal": "positive"|"negative", "confidence": number, "quote": string }],
   "emojis": [{ "emojiId": number, "confidence": number, "quote": string }],
-  "shouldBePoll": boolean
+  "shouldBePoll": boolean,
+  "pollDraft": {
+    "question": string,
+    "options": string[],
+    "allowsMultiple": boolean
+  }
 }
+
+Poll rules:
+- If shouldBePoll is false, set pollDraft to an empty object.
+- If true, include at least 2 concise options.
+- Keep question <= 200 chars, option text <= 80 chars.
 
 Quote rules:
 - Extract only the relevant fragment from the message text
@@ -133,7 +176,7 @@ Quote rules:
       },
     ],
     response_format: { type: 'json_object' },
-    max_tokens: 400,
+    max_tokens: 500,
   })
 
   const raw = response.choices[0].message.content ?? '{}'

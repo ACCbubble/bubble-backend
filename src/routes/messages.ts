@@ -1,7 +1,66 @@
 import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
-import { processMessageContext } from "../lib/context.js";
+import { PollDraft, processMessageContext } from "../lib/context.js";
 import { contextBus } from "../lib/contextBroadcast.js";
+
+const AUTO_POLL_PREFIX = "[AUTO_POLL:";
+
+function parseAutoPollId(content: string): number | null {
+  const match = content.match(/^\[AUTO_POLL:(\d+)\]/);
+  if (!match) return null;
+  return Number(match[1]);
+}
+
+async function createAutoPollAndChainMessage(input: {
+  groupId: number;
+  senderId: number;
+  draft: PollDraft;
+}) {
+  const poll = await prisma.polls.create({
+    data: {
+      group_id: input.groupId,
+      user_id: input.senderId,
+      question: input.draft.question,
+      created_at: new Date(),
+      is_active: true,
+      allows_multiple: input.draft.allowsMultiple,
+      options: {
+        create: input.draft.options.map((optionText) => ({ option_text: optionText })),
+      },
+    },
+    include: {
+      options: true,
+    },
+  });
+
+  const pollMessage = await prisma.message.create({
+    data: {
+      groupId: input.groupId,
+      senderId: input.senderId,
+      content: `${AUTO_POLL_PREFIX}${poll.id}] ${poll.question}`,
+    },
+    include: {
+      sender: { select: { id: true, name: true } },
+    },
+  });
+
+  contextBus.emit("message_created", {
+    groupId: input.groupId,
+    message: {
+      ...pollMessage,
+      poll: {
+        id: poll.id,
+        question: poll.question,
+        allowsMultiple: poll.allows_multiple,
+        options: poll.options.map((option) => ({
+          id: option.id,
+          optionText: option.option_text,
+        })),
+      },
+      isAutoPoll: true,
+    },
+  });
+}
 
 export async function messageRoutes(app: FastifyInstance) {
 
@@ -33,7 +92,16 @@ export async function messageRoutes(app: FastifyInstance) {
       contextBus.emit('message_created', { groupId, message })
 
       // Fire context processing async — does not block the response
-      processMessageContext(message.id, message.senderId, message.groupId, message.content).catch(() => {})
+      processMessageContext(message.id, message.senderId, message.groupId, message.content)
+        .then(async (pollDraft) => {
+          if (!pollDraft) return;
+          await createAutoPollAndChainMessage({
+            groupId: message.groupId,
+            senderId: message.senderId,
+            draft: pollDraft,
+          });
+        })
+        .catch(() => {});
 
       return message;
     } catch (error) {
@@ -113,7 +181,42 @@ export async function messageRoutes(app: FastifyInstance) {
         },
       });
 
-      return messages;
+      const pollIds = messages
+        .map((message) => parseAutoPollId(message.content))
+        .filter((pollId): pollId is number => Number.isInteger(pollId));
+
+      const polls = pollIds.length === 0
+        ? []
+        : await prisma.polls.findMany({
+            where: { id: { in: pollIds } },
+            include: { options: true },
+          });
+
+      const pollById = new Map(polls.map((poll) => [poll.id, poll]));
+
+      return messages.map((message) => {
+        const pollId = parseAutoPollId(message.content);
+        const poll = pollId ? pollById.get(pollId) : null;
+
+        if (!poll) return message;
+
+        return {
+          ...message,
+          isAutoPoll: true,
+          poll: {
+            id: poll.id,
+            question: poll.question,
+            createdAt: poll.created_at,
+            expiresAt: poll.expires_at,
+            isActive: poll.is_active,
+            allowsMultiple: poll.allows_multiple,
+            options: poll.options.map((option) => ({
+              id: option.id,
+              optionText: option.option_text,
+            })),
+          },
+        };
+      });
     } catch (error) {
       reply.status(400).send({ error: "Fetching messages failed" });
     }
