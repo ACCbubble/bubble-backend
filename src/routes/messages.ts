@@ -77,9 +77,40 @@ export async function messageRoutes(app: FastifyInstance) {
 
     try {
       const message = await prisma.message.create({
-        data: { groupId, senderId, content },
-        include: { sender: { select: { id: true, name: true } } },
-      });
+  data: { groupId, senderId, content },
+  include: { sender: { select: { id: true, name: true } } },
+});
+
+
+function classifyAttendance(text: string) {
+  const t = text.toLowerCase()
+
+  if (
+    t.includes("not coming") ||
+    t.includes("can't make it") ||
+    t.includes("i cant come")
+  ) return "not_coming"
+
+  if (
+    t.includes("maybe") ||
+    t.includes("not sure") ||
+    t.includes("might")
+  ) return "maybe"
+
+  if (
+    t.includes("coming") ||
+    t.includes("i'll be there") ||
+    t.includes("i will be there")
+  ) return "coming"
+
+  return null
+}
+
+const attendance = classifyAttendance(content)
+
+if (attendance) {
+  console.log("Detected attendance:", attendance)
+}
 
       // Ensure sender is a group member (idempotent)
       await prisma.groupMember.upsert({
