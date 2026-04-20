@@ -340,54 +340,57 @@ async function classifyMessage(
   const attrList = ATTRIBUTE_DEFS.map(a => `- ${a.key}: ${a.description}`).join('\n')
   const emojiList = emojiTypes.map(e => `- id ${e.id}, "${e.name}" ${e.emoji}: ${e.description}`).join('\n')
 
-  // For viewerRelevance we only need the key names (they're self-documenting)
-  const attrKeys = ATTRIBUTE_DEFS.map(a => a.key).join(', ')
+  // Compact attribute list: key=short_description only (saves ~60% tokens vs full descriptions)
+  const compactAttrList = ATTRIBUTE_DEFS
+    .map(a => `${a.key}=${a.description.split(',')[0].slice(0, 40)}`)
+    .join('; ')
+
+  // Core emojis most likely to appear in messages (keep list short to save tokens)
+  const coreEmojiList = emojiTypes
+    .filter(e => [
+      'coming','not_coming','maybe','coming_late','leaving_early',
+      'needs_ride','offering_ride','carpooling',
+      'bringing_food','bringing_drinks','bringing_alcohol','dietary_need','cooking_for_event',
+      'setup_volunteer','cleanup_volunteer','hosting',
+      'has_question','making_suggestion','excited','hyped','grateful','nervous',
+      'needs_childcare','bringing_kids','bringing_pet','accessibility_need',
+      'splitting_cost','has_budget_concern','bought_ticket',
+      'bringing_friend','weather_concern','sharing_photos',
+    ].includes(e.name))
+    .map(e => `${e.id}:${e.name}${e.emoji}`)
+    .join(', ')
+
+  const allAttrKeys = ATTRIBUTE_DEFS.map(a => a.key).join(',')
 
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
         role: 'system',
-        content: `You analyze group event chat messages. Return only valid JSON — no markdown, no trailing commas.`,
+        content: `You analyze group event chat. Return only valid compact JSON — no markdown, no trailing commas.`,
       },
       {
         role: 'user',
         content: `Sender: ${senderName}
 Message: "${content}"
 
-SENDER ATTRIBUTE DEFINITIONS (for attributes[] only):
-${attrList}
+ATTRS (key=meaning): ${compactAttrList}
 
-EMOJI TYPES (for emojis[] only):
-${emojiList}
+EMOJIS (id:name): ${coreEmojiList}
 
-VIEWER ATTRIBUTE KEYS (for viewerRelevance only):
-${attrKeys}
+Return this JSON:
+{"attributes":[{"key":string,"signal":"positive"|"negative","confidence":number,"quote":string}],"emojis":[{"emojiId":number,"confidence":number,"quote":string}],"viewerRelevance":{"key":score},"shouldBePoll":boolean,"pollDraft":{"question":string,"options":string[],"allowsMultiple":boolean}}
 
-Return ONLY this JSON (no extra fields):
-{
-  "attributes": [{"key":string,"signal":"positive"|"negative","confidence":number,"quote":string}],
-  "emojis": [{"emojiId":number,"confidence":number,"quote":string}],
-  "viewerRelevance": {"<key>":score,...},
-  "shouldBePoll": boolean,
-  "pollDraft": {"question":string,"options":string[],"allowsMultiple":boolean}
-}
-
-RULES (be concise in output):
-- attributes: ONLY what this message clearly reveals about the SENDER. Confidence >= ${MIN_CONFIDENCE} only.
-- emojis: ONLY signals from the emoji list. Confidence >= ${MIN_CONFIDENCE} only.
-- viewerRelevance: Score 0.0-1.0 how relevant this message is to a viewer who HAS each attribute.
-  "anyone need a ride?" → has_car:0.9, needs_ride:0.85, can_carpool:0.8
-  "bringing gluten-free snacks" → has_dietary_restriction:0.95, has_gluten_intolerance:0.95, is_vegetarian:0.6
-  "parking at venue?" → has_car:0.85, needs_parking_info:0.95, needs_directions:0.6
-  ONLY include scores >= ${VIEWER_RELEVANCE_THRESHOLD}. Most messages only affect 2-8 attributes.
-- shouldBePoll: true only for group decision questions with 2+ options.
-- quotes: max ${MAX_QUOTE_CHARS} chars, only the relevant fragment.
-- Arrays/objects may be empty.`,
+Rules:
+- attributes: only clear signals about SENDER, conf>=${MIN_CONFIDENCE}
+- emojis: only from emoji list above, conf>=${MIN_CONFIDENCE}
+- viewerRelevance: for ALL keys in ATTRS, score 0-1 how relevant msg is to viewer who HAS that attr. Include only scores>=${VIEWER_RELEVANCE_THRESHOLD}. Max 8 entries. Examples: "offering ride"→{has_car:0.9,needs_ride:0.9,can_carpool:0.8}; "not coming"→{is_regular:0.7,is_close_with_organizer:0.6}; "gluten-free food"→{has_dietary_restriction:0.95,has_gluten_intolerance:0.95}
+- shouldBePoll: true only for group decisions with 2+ options
+- quotes: max ${MAX_QUOTE_CHARS} chars`,
       },
     ],
     response_format: { type: 'json_object' },
-    max_tokens: 1200,
+    max_tokens: 600,
   })
 
   const raw = response.choices[0].message.content ?? '{}'
