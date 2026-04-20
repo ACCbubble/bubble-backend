@@ -135,21 +135,26 @@ export async function eventRoutes(app: FastifyInstance) {
     }
   );
 
-  // GET /events/:id
+  // GET /events/:id — auth optional (unauthenticated requests skip membership check, used by /demo)
   app.get(
     "/events/:id",
-    { preHandler: [app.authenticate] },
     async (request, reply) => {
       const id = Number((request.params as { id: string }).id);
-      const userId = request.user.userId;
 
       const event = await prisma.event.findUnique({ where: { id } });
       if (!event) return reply.status(404).send({ error: "Event not found" });
 
-      const membership = await prisma.groupMember.findUnique({
-        where: { userId_groupId: { userId, groupId: event.groupId } },
-      });
-      if (!membership) return reply.status(403).send({ error: "Not a member" });
+      // If authenticated, enforce membership
+      try {
+        await request.jwtVerify();
+        const userId = (request.user as { userId: number }).userId;
+        const membership = await prisma.groupMember.findUnique({
+          where: { userId_groupId: { userId, groupId: event.groupId } },
+        });
+        if (!membership) return reply.status(403).send({ error: "Not a member" });
+      } catch {
+        // No valid auth — allow read-only access (demo mode)
+      }
 
       return event;
     }

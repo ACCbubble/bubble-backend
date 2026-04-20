@@ -18,6 +18,7 @@ import { prisma } from "./lib/prisma.js";
 import { EMOJI_TYPE_SEEDS } from "./lib/context.js";
 import { contextBus } from "./lib/contextBroadcast.js";
 import { pollRoutes } from "./routes/polls.js";
+import { demoRoutes } from "./routes/demo.js";
 
 const app = Fastify({ logger: true });
 
@@ -67,6 +68,7 @@ await app.register(eventRoutes);
 await app.register(messageRoutes);
 await app.register(roundtableRoutes);
 await app.register(pollRoutes);
+await app.register(demoRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "0.0.0.0";

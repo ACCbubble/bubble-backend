@@ -13,11 +13,12 @@ function hashToken(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
+const isProd = process.env.NODE_ENV === "production";
 const COOKIE_OPTS = {
   httpOnly: true,
-  sameSite: "strict",
+  sameSite: isProd ? "none" : "strict",
   path: "/",
-  secure: process.env.NODE_ENV === "production",
+  secure: isProd,
 } as const;
 
 export async function authRoutes(app: FastifyInstance) {

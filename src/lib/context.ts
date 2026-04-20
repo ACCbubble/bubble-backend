@@ -380,7 +380,7 @@ Return JSON:
 RULES:
 - extracted.name: ALWAYS null.
 - extracted.location: only if a specific place is explicitly named. Otherwise null.
-- extracted.eventTime: ISO-8601 if a specific date/time is clearly stated, otherwise null.
+- extracted.eventTime: ISO-8601 ONLY if an explicit date AND/OR clock time is literally written (e.g. "Saturday at 7pm", "tomorrow 3pm", "March 5"). Vague phrases like "after X", "later", "tonight", "soon" are NOT enough — return null.
 - extracted.description: treat any named meal/activity as complete — "breakfast", "lunch", "dinner", "coffee", "bowling", "hiking", "movie" etc. are all specific enough. Only leave null for truly vague messages like "let's hang" or "get together" with no activity stated.
 - questionPolls: ONLY if message has a literal "?" with explicit choices listed by the user. Max 1. options:[] if no choices listed.
 - fieldPolls rules:
@@ -461,10 +461,9 @@ function sanitizePollDraft(result: ClassificationResult): PollDraft | null {
     ?.map(option => option.trim())
     .filter((option): option is string => option.length > 0)
 
-  if (!rawQuestion || !rawOptions || rawOptions.length < 2) return null
+  if (!rawQuestion) return null
 
-  const uniqueOptions = [...new Set(rawOptions)].slice(0, 6)
-  if (uniqueOptions.length < 2) return null
+  const uniqueOptions = [...new Set(rawOptions ?? [])].slice(0, 6)
 
   return {
     question: rawQuestion.slice(0, 200),
@@ -526,8 +525,9 @@ Rules:
 - attributes: only clear signals about SENDER, conf>=${MIN_CONFIDENCE}
 - emojis: only from emoji list above, conf>=${MIN_CONFIDENCE}
 - viewerRelevance: for ALL keys in ATTRS, score 0-1 how relevant msg is to viewer who HAS that attr. Include only scores>=${VIEWER_RELEVANCE_THRESHOLD}. Max 8 entries. Examples: "offering ride"→{has_car:0.9,needs_ride:0.9,can_carpool:0.8}; "not coming"→{is_regular:0.7,is_close_with_organizer:0.6}; "gluten-free food"→{has_dietary_restriction:0.95,has_gluten_intolerance:0.95}
-- shouldBePoll: true only for group decisions with 2+ options
-- quotes: max ${MAX_QUOTE_CHARS} chars`,
+- shouldBePoll: true if the message asks a group decision question (even if no options are listed). false for statements, personal updates, or questions that don't require a group vote.
+- pollDraft.options: ONLY choices the sender literally named in the message. NEVER invent or suggest options. If no options were listed, use [] — the poll stays open for others to add suggestions.
+- quotes: verbatim excerpt from the message (not the emoji name or signal label). Max ${MAX_QUOTE_CHARS} chars`,
       },
     ],
     response_format: { type: 'json_object' },
@@ -553,7 +553,8 @@ function trimQuote(quote: string | undefined): string {
 
   if (!normalized) return ''
   if (normalized.length < 6) return ''
-  if (/^[a-z0-9_]+$/.test(normalized)) return ''
+  // Reject bare single words (emoji name echoed back, e.g. "coming", "Coming", "maybe")
+  if (/^[a-zA-Z0-9_]+$/.test(normalized)) return ''
 
   return normalized.slice(0, MAX_QUOTE_CHARS)
 }

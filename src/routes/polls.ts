@@ -1,8 +1,39 @@
 import { FastifyInstance } from "fastify";
+import OpenAI from "openai";
 import { prisma } from "../lib/prisma.js";
 import { contextBus } from "../lib/contextBroadcast.js";
 import { formatPollState, normalizeVoteSelection } from "../lib/polls.js";
 import { createPollForEvent, syncEventFieldFromPollWinner } from "../lib/pollWorkflows.js";
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+async function parseTimeToIso(text: string, timezone?: string): Promise<string | null> {
+  try {
+    // Try native parse first (handles full ISO strings with offset)
+    const native = new Date(text);
+    if (!isNaN(native.getTime()) && text.includes("T")) return native.toISOString();
+    // Fall back to GPT for natural language like "11pm", "tomorrow 7pm", etc.
+    const tz = timezone ?? "America/Chicago";
+    const localNow = new Date().toLocaleString("en-US", { timeZone: tz });
+    const res = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `Convert the given time expression to ISO-8601 (with UTC offset). The user's timezone is ${tz}. Their current local time is ${localNow}. Return ONLY the ISO string, nothing else. If unparseable, return null.`,
+        },
+        { role: "user", content: text },
+      ],
+      max_tokens: 30,
+    });
+    const raw = res.choices[0].message.content?.trim() ?? "";
+    if (raw === "null" || !raw) return null;
+    const parsed = new Date(raw);
+    return isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  } catch {
+    return null;
+  }
+}
 
 interface CreatePollPayload {
   userId: number;
@@ -363,7 +394,7 @@ export async function pollRoutes(app: FastifyInstance) {
 
   app.post("/polls/:pollId/suggestions", async (request, reply) => {
     const pollId = Number((request.params as { pollId: string }).pollId);
-    const { userId, optionText } = request.body as { userId: number; optionText: string };
+    const { userId, optionText, timezone } = request.body as { userId: number; optionText: string; timezone?: string };
 
     if (!Number.isInteger(pollId) || pollId <= 0) {
       return reply.status(400).send({ error: "Invalid pollId" });
@@ -385,9 +416,16 @@ export async function pollRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Poll has expired" });
       }
 
+      // For eventTime polls, parse the text to ISO-8601 so syncEventFieldFromPollWinner can use it
+      let optionValue = trimmed;
+      if (poll.setup_field === "eventTime") {
+        const iso = await parseTimeToIso(trimmed, timezone);
+        if (iso) optionValue = iso;
+      }
+
       // Create the option then immediately vote for it
       const option = await prisma.options.create({
-        data: { poll_id: pollId, option_text: trimmed, option_value: trimmed },
+        data: { poll_id: pollId, option_text: trimmed, option_value: optionValue },
       });
 
       // Remove any existing votes by this user on this poll then cast for the new option
