@@ -23,14 +23,18 @@ function computeEmojiScore(evidences: Array<{ confidence: number; createdAt: Dat
 }
 
 export async function roundtableRoutes(app: FastifyInstance) {
-  // GET /roundtable?groupId=X
+  // GET /roundtable?eventId=X
   app.get('/roundtable', { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { groupId } = request.query as { groupId?: string }
-    if (!groupId) return reply.status(400).send({ error: 'groupId required' })
-    const gid = Number(groupId)
+    const { eventId } = request.query as { eventId?: string }
+    if (!eventId) return reply.status(400).send({ error: 'eventId required' })
+    const eid = Number(eventId)
+
+    // Get the event to find its group
+    const event = await prisma.event.findUnique({ where: { id: eid } })
+    if (!event) return reply.status(404).send({ error: 'Event not found' })
 
     const members = await prisma.groupMember.findMany({
-      where: { groupId: gid },
+      where: { groupId: event.groupId },
       include: { user: { select: { id: true, name: true } } },
     })
 
@@ -39,12 +43,11 @@ export async function roundtableRoutes(app: FastifyInstance) {
         const evidence = await prisma.messageContextEvidence.findMany({
           where: {
             emojiTypeId: { not: null },
-            message: { groupId: gid, senderId: m.userId },
+            message: { eventId: eid, senderId: m.userId },
           },
           include: { message: { select: { createdAt: true } } },
         })
 
-        // Group by emojiTypeId
         const byEmoji = new Map<number, typeof evidence>()
         for (const ev of evidence) {
           if (!ev.emojiTypeId) continue

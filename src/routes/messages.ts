@@ -12,13 +12,13 @@ function parseAutoPollId(content: string): number | null {
 }
 
 async function createAutoPollAndChainMessage(input: {
-  groupId: number;
+  eventId: number;
   senderId: number;
   draft: PollDraft;
 }) {
   const poll = await prisma.polls.create({
     data: {
-      group_id: input.groupId,
+      event_id: input.eventId,
       user_id: input.senderId,
       question: input.draft.question,
       created_at: new Date(),
@@ -35,7 +35,7 @@ async function createAutoPollAndChainMessage(input: {
 
   const pollMessage = await prisma.message.create({
     data: {
-      groupId: input.groupId,
+      eventId: input.eventId,
       senderId: input.senderId,
       content: `${AUTO_POLL_PREFIX}${poll.id}] ${poll.question}`,
     },
@@ -45,7 +45,7 @@ async function createAutoPollAndChainMessage(input: {
   });
 
   contextBus.emit("message_created", {
-    groupId: input.groupId,
+    eventId: input.eventId,
     message: {
       ...pollMessage,
       poll: {
@@ -64,70 +64,29 @@ async function createAutoPollAndChainMessage(input: {
 
 export async function messageRoutes(app: FastifyInstance) {
 
-  // ===============================
-  // SEND MESSAGE
-  // ===============================
-  // Creates a new message in a group (conversation)
+  // POST /messages — send a message to an event
   app.post("/messages", async (request, reply) => {
-    const { groupId, senderId, content } = request.body as {
-      groupId: number;
+    const { eventId, senderId, content } = request.body as {
+      eventId: number;
       senderId: number;
       content: string;
     };
 
     try {
       const message = await prisma.message.create({
-  data: { groupId, senderId, content },
-  include: { sender: { select: { id: true, name: true } } },
-});
-
-
-function classifyAttendance(text: string) {
-  const t = text.toLowerCase()
-
-  if (
-    t.includes("not coming") ||
-    t.includes("can't make it") ||
-    t.includes("i cant come")
-  ) return "not_coming"
-
-  if (
-    t.includes("maybe") ||
-    t.includes("not sure") ||
-    t.includes("might")
-  ) return "maybe"
-
-  if (
-    t.includes("coming") ||
-    t.includes("i'll be there") ||
-    t.includes("i will be there")
-  ) return "coming"
-
-  return null
-}
-
-const attendance = classifyAttendance(content)
-
-if (attendance) {
-  console.log("Detected attendance:", attendance)
-}
-
-      // Ensure sender is a group member (idempotent)
-      await prisma.groupMember.upsert({
-        where: { userId_groupId: { userId: senderId, groupId } },
-        update: {},
-        create: { userId: senderId, groupId, role: "member" },
+        data: { eventId, senderId, content },
+        include: { sender: { select: { id: true, name: true } } },
       });
 
-      // Broadcast new message to group WebSocket clients
-      contextBus.emit('message_created', { groupId, message })
+      // Broadcast new message to event WebSocket clients
+      contextBus.emit('message_created', { eventId, message })
 
       // Fire context processing async — does not block the response
-      processMessageContext(message.id, message.senderId, message.groupId, message.content)
+      processMessageContext(message.id, message.senderId, message.eventId, message.content)
         .then(async (pollDraft) => {
           if (!pollDraft) return;
           await createAutoPollAndChainMessage({
-            groupId: message.groupId,
+            eventId: message.eventId,
             senderId: message.senderId,
             draft: pollDraft,
           });
@@ -140,14 +99,9 @@ if (attendance) {
     }
   });
 
-
-  // ===============================
-  // GET FEED (AI-sorted by viewer relevance)
-  // ===============================
-  // Returns messages sorted by relevance to a specific viewer based on their attributes.
-  // Relevance: high has_car → needs_ride signals matter; dietary restriction → bringing_food matters, etc.
-  app.get("/groups/:id/feed", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
+  // GET /events/:id/feed — AI-sorted feed by viewer relevance
+  app.get("/events/:id/feed", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const eventId = Number((request.params as { id: string }).id);
     const { userId } = request.query as { userId?: string };
     if (!userId) return reply.status(400).send({ error: "userId required" });
     const uid = Number(userId);
@@ -157,7 +111,7 @@ if (attendance) {
     for (const a of attrs) attrMap[a.key] = a.score;
 
     const messages = await prisma.message.findMany({
-      where: { groupId },
+      where: { eventId },
       orderBy: { createdAt: "desc" },
       include: {
         sender: { select: { id: true, name: true } },
@@ -168,11 +122,10 @@ if (attendance) {
       },
     });
 
-    const LAMBDA = Math.LN2 / 48; // 48h half-life for recency
+    const LAMBDA = Math.LN2 / 48;
     function recency(createdAt: Date) {
       return Math.exp(-LAMBDA * (Date.now() - createdAt.getTime()) / 3_600_000);
     }
-    // Cross-relevance: how much does this emoji type matter to THIS viewer?
     function emojiRelevance(emojiName: string): number {
       switch (emojiName) {
         case "needs_ride":    return attrMap["has_car"] ?? 0;
@@ -196,20 +149,15 @@ if (attendance) {
     return scored;
   });
 
-  // ===============================
-  // GET MESSAGES
-  // ===============================
-  // Fetch all messages for a group
-  app.get("/groups/:id/messages", async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
+  // GET /events/:id/messages — chronological messages with poll attachments
+  app.get("/events/:id/messages", async (request, reply) => {
+    const eventId = Number((request.params as { id: string }).id);
 
     try {
       const messages = await prisma.message.findMany({
-        where: { groupId },
+        where: { eventId },
         orderBy: { createdAt: "asc" },
-        include: {
-          sender: true, // include sender info (name, etc.)
-        },
+        include: { sender: true },
       });
 
       const pollIds = messages

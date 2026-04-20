@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 
 function formatPoll(poll: {
   id: number;
-  group_id: number | null;
+  event_id: number | null;
   user_id: number | null;
   question: string | null;
   created_at: Date | null;
@@ -14,7 +14,7 @@ function formatPoll(poll: {
 }) {
   return {
     id: poll.id,
-    groupId: poll.group_id,
+    eventId: poll.event_id,
     userId: poll.user_id,
     question: poll.question,
     createdAt: poll.created_at,
@@ -29,8 +29,8 @@ function formatPoll(poll: {
 }
 
 export async function pollRoutes(app: FastifyInstance) {
-  app.post("/groups/:groupId/polls", async (request, reply) => {
-    const groupId = Number((request.params as { groupId: string }).groupId);
+  app.post("/events/:eventId/polls", async (request, reply) => {
+    const eventId = Number((request.params as { eventId: string }).eventId);
     const { userId, question, options, expiresAt, allowsMultiple } = request.body as {
       userId: number;
       question: string;
@@ -39,8 +39,8 @@ export async function pollRoutes(app: FastifyInstance) {
       allowsMultiple?: boolean;
     };
 
-    if (!Number.isInteger(groupId) || groupId <= 0) {
-      return reply.status(400).send({ error: "Invalid groupId" });
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return reply.status(400).send({ error: "Invalid eventId" });
     }
 
     if (!Number.isInteger(userId) || userId <= 0) {
@@ -72,7 +72,7 @@ export async function pollRoutes(app: FastifyInstance) {
     try {
       const poll = await prisma.polls.create({
         data: {
-          group_id: groupId,
+          event_id: eventId,
           user_id: userId,
           question: question.trim(),
           created_at: new Date(),
@@ -103,16 +103,16 @@ export async function pollRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/groups/:groupId/polls", async (request, reply) => {
-    const groupId = Number((request.params as { groupId: string }).groupId);
+  app.get("/events/:eventId/polls", async (request, reply) => {
+    const eventId = Number((request.params as { eventId: string }).eventId);
 
-    if (!Number.isInteger(groupId) || groupId <= 0) {
-      return reply.status(400).send({ error: "Invalid groupId" });
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return reply.status(400).send({ error: "Invalid eventId" });
     }
 
     try {
       const polls = await prisma.polls.findMany({
-        where: { group_id: groupId },
+        where: { event_id: eventId },
         orderBy: { id: "desc" },
         include: {
           options: true,

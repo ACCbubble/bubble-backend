@@ -13,6 +13,7 @@ import { authRoutes } from "./routes/auth.js";
 import { isRevoked } from "./lib/tokenRevocation.js";
 import { messageRoutes } from "./routes/messages.js";
 import { roundtableRoutes } from "./routes/roundtable.js";
+import { eventRoutes } from "./routes/events.js";
 import { prisma } from "./lib/prisma.js";
 import { EMOJI_TYPE_SEEDS } from "./lib/context.js";
 import { contextBus } from "./lib/contextBroadcast.js";
@@ -62,6 +63,7 @@ await app.register(healthRoutes);
 await app.register(userRoutes);
 await app.register(groupRoutes);
 await app.register(groupMemberRoutes);
+await app.register(eventRoutes);
 await app.register(messageRoutes);
 await app.register(roundtableRoutes);
 await app.register(pollRoutes);
@@ -85,31 +87,31 @@ for (const seed of EMOJI_TYPE_SEEDS) {
   });
 }
 
-// WebSocket server — clients connect to ws://host:3000/ws?groupId=X
+// WebSocket server — clients connect to ws://host:3000/ws?eventId=X
 const wss = new WebSocketServer({ server: app.server });
 const connections = new Map<number, Set<WebSocket>>();
 
 wss.on("connection", (ws, req) => {
   const url = new URL(req.url ?? "/", "http://x");
-  const groupId = Number(url.searchParams.get("groupId"));
-  if (!groupId) return ws.close();
+  const eventId = Number(url.searchParams.get("eventId"));
+  if (!eventId) return ws.close();
 
-  if (!connections.has(groupId)) connections.set(groupId, new Set());
-  connections.get(groupId)!.add(ws);
+  if (!connections.has(eventId)) connections.set(eventId, new Set());
+  connections.get(eventId)!.add(ws);
 
-  ws.on("close", () => connections.get(groupId)?.delete(ws));
+  ws.on("close", () => connections.get(eventId)?.delete(ws));
 });
 
-contextBus.on("context_updated", ({ groupId, userId }: { groupId: number; userId: number }) => {
-  const payload = JSON.stringify({ type: "context_updated", groupId, userId });
-  connections.get(groupId)?.forEach(ws => {
+contextBus.on("context_updated", ({ eventId, userId }: { eventId: number; userId: number }) => {
+  const payload = JSON.stringify({ type: "context_updated", eventId, userId });
+  connections.get(eventId)?.forEach(ws => {
     if (ws.readyState === WebSocket.OPEN) ws.send(payload);
   });
 });
 
-contextBus.on("message_created", ({ groupId, message }: { groupId: number; message: unknown }) => {
+contextBus.on("message_created", ({ eventId, message }: { eventId: number; message: unknown }) => {
   const payload = JSON.stringify({ type: "new_message", message });
-  connections.get(groupId)?.forEach(ws => {
+  connections.get(eventId)?.forEach(ws => {
     if (ws.readyState === WebSocket.OPEN) ws.send(payload);
   });
 });

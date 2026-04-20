@@ -29,47 +29,46 @@ model User {
 model Group {
   id        Int      @id @default(autoincrement())
   creatorId Int      @map("creator_id")
+  name      String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  name      String?
 
-  creator      User          @relation("GroupCreator", fields: [creatorId], references: [id])
-  groupMembers GroupMember[]
-  events       Event[]
+  creator User          @relation("GroupCreator", fields: [creatorId], references: [id])
+  members GroupMember[]
+  events  Event[]
 
   @@map("groups")
 }
 
-model Event {
-  id        Int      @id @default(autoincrement())
-  groupId   Int      @map("group_id")
-  creatorId Int      @map("creator_id")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+model GroupMember {
+  id       Int      @id @default(autoincrement())
+  userId   Int      @map("user_id")
+  groupId  Int      @map("group_id")
+  joinedAt DateTime @default(now()) @map("joined_at") @db.Timestamptz(6)
+  role     String   @default("member")
 
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupId])
+  @@map("group_members")
+}
+
+model Event {
+  id          Int       @id @default(autoincrement())
+  groupId     Int       @map("group_id")
+  creatorId   Int       @map("creator_id")
   name        String
   location    String?
   eventTime   DateTime? @map("event_time") @db.Timestamptz(6)
   description String?
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  group    Group     @relation(fields: [groupId], references: [id])
+  group    Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
   creator  User      @relation("EventCreator", fields: [creatorId], references: [id])
   messages Message[]
   polls    polls[]
 
   @@map("events")
-}
-
-model GroupMember {
-  id       Int       @id @default(autoincrement())
-  userId   Int       @map("user_id")
-  groupId  Int       @map("group_id")
-  joinedAt DateTime? @map("joined_at") @db.Timestamptz(6)
-  role     String?
-
-  user  User  @relation(fields: [userId], references: [id])
-  group Group @relation(fields: [groupId], references: [id])
-
-  @@unique([userId, groupId])
-  @@map("group_members")
 }
 
 model Message {
@@ -79,9 +78,10 @@ model Message {
   content   String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  event           Event                    @relation(fields: [eventId], references: [id])
+  event           Event                    @relation(fields: [eventId], references: [id], onDelete: Cascade)
   sender          User                     @relation("MessageSender", fields: [senderId], references: [id])
   contextEvidence MessageContextEvidence[]
+  viewerRelevance MessageViewerRelevance[]
 
   @@map("messages")
 }
@@ -137,6 +137,19 @@ model MessageContextEvidence {
   emojiType EmojiType? @relation(fields: [emojiTypeId], references: [id])
 
   @@map("message_context_evidence")
+}
+
+model MessageViewerRelevance {
+  id           Int    @id @default(autoincrement())
+  messageId    Int    @map("message_id")
+  attributeKey String @map("attribute_key")
+  score        Float
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, attributeKey])
+  @@index([attributeKey, score])
+  @@map("message_viewer_relevance")
 }
 
 model options {
