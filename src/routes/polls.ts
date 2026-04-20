@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma.js";
 
 function formatPoll(poll: {
   id: number;
-  group_id: number | null;
+  event_id: number | null;
   user_id: number | null;
   question: string | null;
   created_at: Date | null;
@@ -14,7 +14,7 @@ function formatPoll(poll: {
 }) {
   return {
     id: poll.id,
-    groupId: poll.group_id,
+    eventId: poll.event_id,
     userId: poll.user_id,
     question: poll.question,
     createdAt: poll.created_at,
@@ -72,7 +72,7 @@ export async function pollRoutes(app: FastifyInstance) {
     try {
       const poll = await prisma.polls.create({
         data: {
-          group_id: groupId,
+          event_id: groupId,
           user_id: userId,
           question: question.trim(),
           created_at: new Date(),
@@ -111,12 +111,12 @@ export async function pollRoutes(app: FastifyInstance) {
     }
 
     try {
+      const events = await prisma.event.findMany({ where: { groupId }, select: { id: true } });
+      const eventIds = events.map(e => e.id);
       const polls = await prisma.polls.findMany({
-        where: { group_id: groupId },
+        where: { event_id: { in: eventIds } },
         orderBy: { id: "desc" },
-        include: {
-          options: true,
-        },
+        include: { options: true },
       });
 
       return polls.map((poll) => ({

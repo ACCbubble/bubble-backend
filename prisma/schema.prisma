@@ -82,6 +82,7 @@ model Message {
   event           Event                    @relation(fields: [eventId], references: [id])
   sender          User                     @relation("MessageSender", fields: [senderId], references: [id])
   contextEvidence MessageContextEvidence[]
+  viewerRelevance MessageViewerRelevance[]
 
   @@map("messages")
 }
@@ -137,6 +138,19 @@ model MessageContextEvidence {
   emojiType EmojiType? @relation(fields: [emojiTypeId], references: [id])
 
   @@map("message_context_evidence")
+}
+
+model MessageViewerRelevance {
+  id           Int    @id @default(autoincrement())
+  messageId    Int    @map("message_id")
+  attributeKey String @map("attribute_key")
+  score        Float
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, attributeKey])
+  @@index([attributeKey, score])
+  @@map("message_viewer_relevance")
 }
 
 model options {
