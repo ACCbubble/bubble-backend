@@ -84,37 +84,7 @@ export async function eventRoutes(app: FastifyInstance) {
     "/events/:id",
     { preHandler: [app.authenticate] },
     async (request, reply) => {
-      const id = Number((request.params as { id: string }).id);
-      const userId = request.user.userId;
-      const { name, location, eventTime, description } = request.body as {
-        name?: string;
-        location?: string;
-        eventTime?: string;
-        description?: string;
-      };
-
-      const event = await prisma.event.findUnique({ where: { id } });
-      if (!event) return reply.status(404).send({ error: "Event not found" });
-
-      const membership = await prisma.groupMember.findUnique({
-        where: { userId_groupId: { userId, groupId: event.groupId } },
-      });
-      if (!membership) return reply.status(403).send({ error: "Not a member" });
-
-      try {
-        const updated = await prisma.event.update({
-          where: { id },
-          data: {
-            ...(name !== undefined && { name }),
-            ...(location !== undefined && { location }),
-            ...(eventTime !== undefined && { eventTime: eventTime ? new Date(eventTime) : null }),
-            ...(description !== undefined && { description }),
-          },
-        });
-        return updated;
-      } catch {
-        reply.status(400).send({ error: "Update failed" });
-      }
+      return reply.status(403).send({ error: "Event details are managed by poll results" });
     }
   );
 }

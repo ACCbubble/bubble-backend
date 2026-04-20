@@ -229,6 +229,28 @@ export interface PollDraft {
   allowsMultiple: boolean
 }
 
+export interface SetupPollOptionDraft {
+  optionText: string
+  optionValue?: string
+}
+
+export interface SetupFieldPollDraft {
+  field: 'name' | 'location' | 'eventTime' | 'description'
+  question: string
+  options: SetupPollOptionDraft[]
+}
+
+export interface EventSetupAnalysis {
+  extracted: {
+    name: string | null
+    location: string | null
+    eventTime: string | null
+    description: string | null
+  }
+  questionPolls: PollDraft[]
+  fieldPolls: SetupFieldPollDraft[]
+}
+
 interface ClassificationResult {
   attributes: AttrResult[]
   emojis: EmojiResult[]
@@ -239,6 +261,28 @@ interface ClassificationResult {
     options?: string[]
     allowsMultiple?: boolean
   }
+}
+
+interface EventSetupResult {
+  extracted?: {
+    name?: string
+    location?: string
+    eventTime?: string
+    description?: string
+  }
+  questionPolls?: Array<{
+    question?: string
+    options?: string[]
+    allowsMultiple?: boolean
+  }>
+  fieldPolls?: Array<{
+    field?: 'name' | 'location' | 'eventTime' | 'description'
+    question?: string
+    options?: Array<{
+      optionText?: string
+      optionValue?: string
+    }>
+  }>
 }
 
 export async function processMessageContext(
@@ -309,6 +353,87 @@ export async function processMessageContext(
   } catch (err) {
     console.error('[context] processing failed:', err)
     return null
+  }
+}
+
+export async function analyzeEventSetup(input: {
+  groupName: string
+  initialMessage: string
+}): Promise<EventSetupAnalysis> {
+  const todayIso = new Date().toISOString()
+  const response = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      {
+        role: 'system',
+        content: 'You extract event setup data from a group creator message. Return only valid compact JSON.',
+      },
+      {
+        role: 'user',
+        content: `Today: ${todayIso}
+Group name: "${input.groupName}"
+Initial message: "${input.initialMessage}"
+
+Return JSON:
+{"extracted":{"name":string|null,"location":string|null,"eventTime":string|null,"description":string|null},"questionPolls":[{"question":string,"options":string[],"allowsMultiple":boolean}],"fieldPolls":[{"field":"name"|"location"|"eventTime"|"description","question":string,"options":[{"optionText":string,"optionValue":string}]}]}
+
+Rules:
+- extracted.name/location/description should be null if the message does not clearly specify them.
+- extracted.eventTime must be ISO-8601 or null.
+- If the message mentions only a weekday like Friday, resolve it to the next upcoming matching date after Today.
+- questionPolls: create one poll for each distinct user-facing decision/question in the initial message. Multiple polls are allowed.
+- fieldPolls: for every missing field among name, location, eventTime, description, create exactly one poll with 2-4 realistic options.
+- For eventTime field polls, optionValue must be ISO-8601 and optionText should be a human-friendly label.
+- For other field polls, optionValue should equal the final chosen text.
+- Keep options concise and distinct.`,
+      },
+    ],
+    response_format: { type: 'json_object' },
+    max_tokens: 900,
+  })
+
+  const raw = response.choices[0].message.content ?? '{}'
+  const parsed = JSON.parse(raw) as EventSetupResult
+
+  const extracted = {
+    name: sanitizeTextField(parsed.extracted?.name),
+    location: sanitizeTextField(parsed.extracted?.location),
+    eventTime: sanitizeIsoDateField(parsed.extracted?.eventTime),
+    description: sanitizeTextField(parsed.extracted?.description),
+  }
+
+  if (extractClockTimes(input.initialMessage).length > 1) {
+    extracted.eventTime = null
+  }
+
+  const questionPolls = (parsed.questionPolls ?? [])
+    .map((poll) => sanitizePollDraft({
+      shouldBePoll: true,
+      pollDraft: poll,
+    } as ClassificationResult))
+    .filter((poll): poll is PollDraft => Boolean(poll))
+
+  const fieldPolls = (parsed.fieldPolls ?? [])
+    .map(sanitizeSetupFieldPollDraft)
+    .filter((poll): poll is SetupFieldPollDraft => Boolean(poll))
+
+  const promoted = promoteQuestionPollsToFieldPolls({
+    questionPolls,
+    fieldPolls,
+    initialMessage: input.initialMessage,
+  })
+
+  const fallbackFieldPolls = buildFallbackSetupFieldPolls({
+    groupName: input.groupName,
+    initialMessage: input.initialMessage,
+    extracted,
+    existingFields: new Set([...fieldPolls, ...promoted.fieldPolls].map((poll) => poll.field)),
+  })
+
+  return {
+    extracted,
+    questionPolls: promoted.questionPolls,
+    fieldPolls: [...fieldPolls, ...promoted.fieldPolls, ...fallbackFieldPolls],
   }
 }
 
@@ -404,7 +529,285 @@ Rules:
 
 function trimQuote(quote: string | undefined): string {
   if (!quote) return ''
-  return quote.slice(0, MAX_QUOTE_CHARS)
+  const normalized = quote
+    .trim()
+    .replace(/^["'`]+|["'`]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!normalized) return ''
+  if (normalized.length < 6) return ''
+  if (/^[a-z0-9_]+$/.test(normalized)) return ''
+
+  return normalized.slice(0, MAX_QUOTE_CHARS)
+}
+
+function sanitizeTextField(value: string | undefined) {
+  if (!value) return null
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  return normalized.length > 0 ? normalized.slice(0, 200) : null
+}
+
+function sanitizeIsoDateField(value: string | undefined) {
+  if (!value) return null
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return null
+  return parsed.toISOString()
+}
+
+function sanitizeSetupFieldPollDraft(
+  poll: NonNullable<EventSetupResult['fieldPolls']>[number],
+): SetupFieldPollDraft | null {
+  if (!poll?.field || !['name', 'location', 'eventTime', 'description'].includes(poll.field)) {
+    return null
+  }
+
+  const question = sanitizeTextField(poll.question)
+  if (!question) return null
+
+  const optionEntries: Array<readonly [string, SetupPollOptionDraft]> = []
+  for (const option of poll.options ?? []) {
+    const optionText = sanitizeTextField(option.optionText)
+    if (!optionText) continue
+
+    if (poll.field === 'eventTime') {
+      const optionValue = sanitizeIsoDateField(option.optionValue)
+      if (!optionValue) continue
+      optionEntries.push([optionValue, { optionText, optionValue }])
+      continue
+    }
+
+    const optionValue = sanitizeTextField(option.optionValue) ?? optionText
+    optionEntries.push([optionValue, { optionText, optionValue }])
+  }
+
+  const options = [...new Map<string, SetupPollOptionDraft>(optionEntries).values()].slice(0, 4)
+
+  if (options.length < 2) return null
+
+  return {
+    field: poll.field,
+    question,
+    options,
+  }
+}
+
+function buildFallbackSetupFieldPolls(input: {
+  groupName: string
+  initialMessage: string
+  extracted: EventSetupAnalysis['extracted']
+  existingFields: Set<SetupFieldPollDraft['field']>
+}): SetupFieldPollDraft[] {
+  const polls: SetupFieldPollDraft[] = []
+  const missingFields = (['name', 'location', 'eventTime', 'description'] as const)
+    .filter((field) => !input.extracted[field] && !input.existingFields.has(field))
+
+  for (const field of missingFields) {
+    if (field === 'name') {
+      polls.push({
+        field,
+        question: 'What should we call this plan?',
+        options: [
+          { optionText: input.groupName, optionValue: input.groupName },
+          { optionText: `${input.groupName} Plan`, optionValue: `${input.groupName} Plan` },
+          { optionText: `${input.groupName} Hangout`, optionValue: `${input.groupName} Hangout` },
+        ],
+      })
+    }
+
+    if (field === 'location') {
+      polls.push({
+        field,
+        question: 'Where should this happen?',
+        options: [
+          { optionText: 'Student Center', optionValue: 'Student Center' },
+          { optionText: 'Downtown', optionValue: 'Downtown' },
+          { optionText: 'Campus Lawn', optionValue: 'Campus Lawn' },
+        ],
+      })
+    }
+
+    if (field === 'eventTime') {
+      const timeOptions = buildFallbackEventTimeOptions(input.initialMessage)
+      polls.push({
+        field,
+        question: 'When should this happen?',
+        options: timeOptions,
+      })
+    }
+
+    if (field === 'description') {
+      polls.push({
+        field,
+        question: 'What kind of plan is this?',
+        options: buildFallbackDescriptionOptions(input.initialMessage),
+      })
+    }
+  }
+
+  return polls
+}
+
+function promoteQuestionPollsToFieldPolls(input: {
+  questionPolls: PollDraft[]
+  fieldPolls: SetupFieldPollDraft[]
+  initialMessage: string
+}) {
+  const existingFields = new Set(input.fieldPolls.map((poll) => poll.field))
+  const promotedPolls: SetupFieldPollDraft[] = []
+  const remainingQuestionPolls: PollDraft[] = []
+
+  for (const poll of input.questionPolls) {
+    const field = detectPollField(poll)
+    if (!field || existingFields.has(field)) {
+      remainingQuestionPolls.push(poll)
+      continue
+    }
+
+    const setupPoll = toSetupFieldPollDraft(field, poll, input.initialMessage)
+    if (!setupPoll) {
+      remainingQuestionPolls.push(poll)
+      continue
+    }
+
+    existingFields.add(field)
+    promotedPolls.push(setupPoll)
+  }
+
+  return {
+    questionPolls: remainingQuestionPolls,
+    fieldPolls: promotedPolls,
+  }
+}
+
+function detectPollField(poll: PollDraft): SetupFieldPollDraft['field'] | null {
+  const question = poll.question.toLowerCase()
+  const optionBlob = poll.options.join(' ').toLowerCase()
+
+  if (/\b(name|call|title)\b/.test(question)) return 'name'
+  if (/\b(where|location|venue)\b/.test(question)) return 'location'
+  if (/\b(when|time|start|date)\b/.test(question)) return 'eventTime'
+  if (/\b(activity|plan|do)\b/.test(question)) return 'description'
+  if (/\b(bowling|karaoke|movie|dinner|coffee|game|hike|picnic)\b/.test(optionBlob)) return 'description'
+
+  return null
+}
+
+function toSetupFieldPollDraft(
+  field: SetupFieldPollDraft['field'],
+  poll: PollDraft,
+  initialMessage: string,
+): SetupFieldPollDraft | null {
+  if (field === 'eventTime') {
+    const options: SetupPollOptionDraft[] = []
+    for (const optionText of poll.options) {
+      const optionValue = buildEventTimeOptionValue(optionText, initialMessage)
+      if (!optionValue) continue
+      options.push({ optionText, optionValue })
+    }
+
+    if (options.length < 2) return null
+    return { field, question: poll.question, options }
+  }
+
+  const options = poll.options.map((optionText) => ({ optionText, optionValue: optionText }))
+  if (options.length < 2) return null
+  return { field, question: poll.question, options }
+}
+
+function buildEventTimeOptionValue(optionText: string, initialMessage: string) {
+  const directIso = sanitizeIsoDateField(optionText)
+  if (directIso) return directIso
+
+  const extractedTimes = extractClockTimes(optionText)
+  const time = extractedTimes[0]
+  if (!time) return null
+
+  const baseDate = extractUpcomingWeekday(initialMessage) ?? new Date(Date.now() + 24 * 60 * 60 * 1000)
+  return combineDateAndTime(baseDate, time)
+}
+
+function buildFallbackEventTimeOptions(initialMessage: string): SetupPollOptionDraft[] {
+  const weekday = extractUpcomingWeekday(initialMessage)
+  const times = extractClockTimes(initialMessage)
+  const baseDate = weekday ?? new Date(Date.now() + 24 * 60 * 60 * 1000)
+  const candidates = (times.length > 0 ? times : ['18:00', '19:00', '20:00']).slice(0, 3)
+
+  return candidates.map((time) => {
+    const iso = combineDateAndTime(baseDate, time)
+    const labelDate = new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+    const [hours, minutes] = time.split(':')
+    const labelTime = new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: minutes === '00' ? undefined : '2-digit' })
+    return {
+      optionText: `${labelDate} at ${labelTime}`,
+      optionValue: iso,
+    }
+  })
+}
+
+function buildFallbackDescriptionOptions(initialMessage: string): SetupPollOptionDraft[] {
+  const lower = initialMessage.toLowerCase()
+  const options = new Set<string>()
+
+  const keywords: Array<[RegExp, string]> = [
+    [/\bbowling\b/, 'Bowling night'],
+    [/\bkaraoke\b/, 'Karaoke night'],
+    [/\bmovie\b/, 'Movie night'],
+    [/\bgame|board game\b/, 'Game night'],
+    [/\bdinner|food|eat\b/, 'Dinner meetup'],
+    [/\bcoffee|cafe\b/, 'Coffee meetup'],
+  ]
+
+  for (const [pattern, label] of keywords) {
+    if (pattern.test(lower)) options.add(label)
+  }
+
+  options.add('Casual hangout')
+  options.add('Group meetup')
+
+  return [...options].slice(0, 4).map((optionText) => ({ optionText, optionValue: optionText }))
+}
+
+function extractUpcomingWeekday(message: string) {
+  const weekdays = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
+  const lower = message.toLowerCase()
+  const match = weekdays.find((weekday) => lower.includes(weekday))
+  if (!match) return null
+
+  const now = new Date()
+  const targetDay = weekdays.indexOf(match)
+  const next = new Date(now)
+  const delta = (targetDay - now.getDay() + 7) % 7 || 7
+  next.setDate(now.getDate() + delta)
+  next.setHours(0, 0, 0, 0)
+  return next
+}
+
+function extractClockTimes(message: string) {
+  const matches = [...message.matchAll(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/gi)]
+  const times = new Set<string>()
+
+  for (const match of matches) {
+    const hour = Number(match[1])
+    const minute = Number(match[2] ?? '0')
+    const meridiem = match[3]?.toLowerCase()
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || !meridiem) continue
+
+    let normalizedHour = hour % 12
+    if (meridiem === 'pm') normalizedHour += 12
+    const hh = String(normalizedHour).padStart(2, '0')
+    const mm = String(minute).padStart(2, '0')
+    times.add(`${hh}:${mm}`)
+  }
+
+  return [...times]
+}
+
+function combineDateAndTime(date: Date, time: string) {
+  const [hours, minutes] = time.split(':').map(Number)
+  const combined = new Date(date)
+  combined.setHours(hours ?? 0, minutes ?? 0, 0, 0)
+  return combined.toISOString()
 }
 
 async function updateAttribute(

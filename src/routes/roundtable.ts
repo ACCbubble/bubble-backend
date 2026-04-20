@@ -22,6 +22,20 @@ function computeEmojiScore(evidences: Array<{ confidence: number; createdAt: Dat
   return wTotal > 0 ? Math.min(wSum / wTotal, 0.99) : 0
 }
 
+function quoteFromEvidence(evidence: { displayQuote: string; message: { content: string } }) {
+  const displayQuote = evidence.displayQuote.trim()
+  const messageContent = evidence.message.content.trim().replace(/\s+/g, ' ')
+  if (!displayQuote) return messageContent.slice(0, 100)
+
+  const quoteLower = displayQuote.toLowerCase()
+  const messageLower = messageContent.toLowerCase()
+  if (messageLower.includes(quoteLower)) {
+    return displayQuote
+  }
+
+  return messageContent.slice(0, 100)
+}
+
 export async function roundtableRoutes(app: FastifyInstance) {
   app.get('/roundtable', { preHandler: [app.authenticate] }, async (request, reply) => {
     const { eventId, groupId } = request.query as { eventId?: string; groupId?: string }
@@ -62,7 +76,7 @@ export async function roundtableRoutes(app: FastifyInstance) {
               ? { eventId: eid, senderId: m.userId }
               : { event: { groupId: gid }, senderId: m.userId },
           },
-          include: { message: { select: { createdAt: true } } },
+          include: { message: { select: { createdAt: true, content: true } } },
         })
 
         const byEmoji = new Map<number, typeof evidence>()
@@ -85,7 +99,7 @@ export async function roundtableRoutes(app: FastifyInstance) {
                 return wb - wa
               })
               .slice(0, MAX_QUOTES)
-              .map(e => e.displayQuote)
+              .map(quoteFromEvidence)
 
             return { emojiId, score, topQuotes }
           })

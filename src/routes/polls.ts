@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
 import { contextBus } from "../lib/contextBroadcast.js";
 import { formatPollState, normalizeVoteSelection } from "../lib/polls.js";
+import { createPollForEvent, syncEventFieldFromPollWinner } from "../lib/pollWorkflows.js";
 
 interface CreatePollPayload {
   userId: number;
@@ -64,8 +65,6 @@ function normalizePollPayload(payload: CreatePollPayload): { error: string } | {
   } as const;
 }
 
-type PollWithVotes = Awaited<ReturnType<typeof prisma.polls.findUnique>>;
-
 async function loadPollState(pollId: number, viewerUserId?: number) {
   const poll = await prisma.polls.findUnique({
     where: { id: pollId },
@@ -82,43 +81,6 @@ async function loadPollState(pollId: number, viewerUserId?: number) {
   return formatPollState(poll, viewerUserId);
 }
 
-async function createPollForEvent(
-  eventId: number,
-  payload: CreatePollPayload,
-): Promise<{ error: string } | { pollId: number; pollState: Awaited<ReturnType<typeof loadPollState>> }> {
-  const normalized = normalizePollPayload(payload);
-  if ("error" in normalized) return normalized;
-
-  const created = await prisma.polls.create({
-    data: {
-      event_id: eventId,
-      user_id: normalized.value.userId,
-      question: normalized.value.question,
-      created_at: new Date(),
-      expires_at: normalized.value.parsedExpiresAt,
-      is_active: true,
-      allows_multiple: normalized.value.allowsMultiple,
-      options: {
-        create: normalized.value.options.map((optionText) => ({ option_text: optionText })),
-      },
-    },
-    select: { id: true },
-  });
-
-  await prisma.message.create({
-    data: {
-      eventId,
-      senderId: normalized.value.userId,
-      content: `[AUTO_POLL:${created.id}] ${normalized.value.question}`,
-    },
-  });
-
-  contextBus.emit("poll_updated", { eventId, pollId: created.id });
-
-  const pollState = await loadPollState(created.id, normalized.value.userId);
-  return { pollId: created.id, pollState } as const;
-}
-
 export async function pollRoutes(app: FastifyInstance) {
   app.post("/events/:eventId/polls", async (request, reply) => {
     const eventId = Number((request.params as { eventId: string }).eventId);
@@ -129,10 +91,20 @@ export async function pollRoutes(app: FastifyInstance) {
     }
 
     try {
-      const result = await createPollForEvent(eventId, payload);
-      if ("error" in result) {
-        return reply.status(400).send({ error: result.error });
+      const normalized = normalizePollPayload(payload);
+      if ("error" in normalized) {
+        return reply.status(400).send({ error: normalized.error });
       }
+
+      const result = await createPollForEvent({
+        eventId,
+        userId: normalized.value.userId,
+        question: normalized.value.question,
+        options: normalized.value.options.map((optionText) => ({ optionText })),
+        allowsMultiple: normalized.value.allowsMultiple,
+        expiresAt: normalized.value.parsedExpiresAt,
+        isAutoPoll: false,
+      });
 
       return reply.status(201).send({
         status: "OK",
@@ -163,10 +135,20 @@ export async function pollRoutes(app: FastifyInstance) {
     }
 
     try {
-      const result = await createPollForEvent(eventId, payload);
-      if ("error" in result) {
-        return reply.status(400).send({ error: result.error });
+      const normalized = normalizePollPayload(payload);
+      if ("error" in normalized) {
+        return reply.status(400).send({ error: normalized.error });
       }
+
+      const result = await createPollForEvent({
+        eventId,
+        userId: normalized.value.userId,
+        question: normalized.value.question,
+        options: normalized.value.options.map((optionText) => ({ optionText })),
+        allowsMultiple: normalized.value.allowsMultiple,
+        expiresAt: normalized.value.parsedExpiresAt,
+        isAutoPoll: false,
+      });
 
       return reply.status(201).send({
         status: "OK",
@@ -362,6 +344,7 @@ export async function pollRoutes(app: FastifyInstance) {
         ),
       ]);
 
+      await syncEventFieldFromPollWinner(pollId);
       contextBus.emit("poll_updated", { eventId: poll.event_id, pollId });
 
       return {

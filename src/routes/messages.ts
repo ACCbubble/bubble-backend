@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma.js";
 import { PollDraft, processMessageContext } from "../lib/context.js";
 import { contextBus } from "../lib/contextBroadcast.js";
 import { formatPollState } from "../lib/polls.js";
+import { createPollForEvent } from "../lib/pollWorkflows.js";
 
 const AUTO_POLL_PREFIX = "[AUTO_POLL:";
 
@@ -33,48 +34,14 @@ async function createAutoPollAndChainMessage(input: {
   draft: PollDraft;
   isAutoPoll: boolean;
 }) {
-  const poll = await prisma.polls.create({
-    data: {
-      event_id: input.eventId,
-      user_id: input.senderId,
-      question: input.draft.question,
-      created_at: new Date(),
-      is_active: true,
-      allows_multiple: input.draft.allowsMultiple,
-      options: {
-        create: input.draft.options.map((optionText) => ({ option_text: optionText })),
-      },
-    },
-    include: {
-      options: {
-        include: {
-          votes: true,
-        },
-      },
-    },
-  });
-
-  const pollMessage = await prisma.message.create({
-    data: {
-      eventId: input.eventId,
-      senderId: input.senderId,
-      content: `${AUTO_POLL_PREFIX}${poll.id}] ${input.draft.question}`,
-    },
-    include: { sender: { select: { id: true, name: true } } },
-  });
-
-  contextBus.emit("message_created", {
+  return createPollForEvent({
     eventId: input.eventId,
-    message: {
-      ...pollMessage,
-      poll: formatPollState(poll, input.senderId),
-      isAutoPoll: input.isAutoPoll,
-    },
+    userId: input.senderId,
+    question: input.draft.question,
+    allowsMultiple: input.draft.allowsMultiple,
+    options: input.draft.options.map((optionText) => ({ optionText })),
+    isAutoPoll: input.isAutoPoll,
   });
-
-  contextBus.emit("poll_updated", { eventId: input.eventId, pollId: poll.id });
-
-  return poll;
 }
 
 async function buildPollMessageMap(input: {

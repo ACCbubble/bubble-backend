@@ -1,6 +1,8 @@
 import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
 import { addUserToGroup } from "./groupMembers.js";
+import { analyzeEventSetup } from "../lib/context.js";
+import { createPollForEvent } from "../lib/pollWorkflows.js";
 
 async function groupView(groupId: number) {
   const group = await prisma.group.findUnique({
@@ -24,15 +26,73 @@ export async function groupRoutes(app: FastifyInstance) {
     "/groups",
     { preHandler: [app.authenticate] },
     async (request, reply) => {
-      const { name } = request.body as { name: string };
+      const { name, initialMessage } = request.body as { name: string; initialMessage?: string };
       const creatorId = request.user.userId;
+      const trimmedName = name?.trim();
+      const trimmedInitialMessage = initialMessage?.trim() ?? "";
+
+      if (!trimmedName) {
+        return reply.status(400).send({ error: "Group name is required" });
+      }
 
       try {
-        const group = await prisma.group.create({ data: { creatorId, name } });
-        await prisma.event.create({
-          data: { groupId: group.id, creatorId, name: name ?? "Event" },
-        });
+        const setup = trimmedInitialMessage
+          ? await analyzeEventSetup({ groupName: trimmedName, initialMessage: trimmedInitialMessage })
+          : null;
+
+        const group = await prisma.group.create({ data: { creatorId, name: trimmedName } });
         await addUserToGroup(creatorId, group.id, "owner");
+
+        const event = await prisma.event.create({
+          data: {
+            groupId: group.id,
+            creatorId,
+            name: setup?.extracted.name ?? `${trimmedName} Plan`,
+            location: setup?.extracted.location ?? null,
+            eventTime: setup?.extracted.eventTime ? new Date(setup.extracted.eventTime) : null,
+            description: setup?.extracted.description ?? null,
+          },
+        });
+
+        if (trimmedInitialMessage) {
+          await prisma.message.create({
+            data: {
+              eventId: event.id,
+              senderId: creatorId,
+              content: trimmedInitialMessage,
+            },
+          });
+        }
+
+        if (setup) {
+          for (const poll of setup.questionPolls) {
+            await createPollForEvent({
+              eventId: event.id,
+              userId: creatorId,
+              question: poll.question,
+              options: poll.options.map((optionText) => ({ optionText })),
+              allowsMultiple: poll.allowsMultiple,
+              isAutoPoll: true,
+            });
+          }
+
+          const missingFields = new Set(
+            (["name", "location", "eventTime", "description"] as const).filter((field) => !setup.extracted[field]),
+          );
+
+          for (const poll of setup.fieldPolls.filter((candidate) => missingFields.has(candidate.field))) {
+            await createPollForEvent({
+              eventId: event.id,
+              userId: creatorId,
+              question: poll.question,
+              options: poll.options,
+              allowsMultiple: false,
+              setupField: poll.field,
+              isAutoPoll: true,
+            });
+          }
+        }
+
         return groupView(group.id);
       } catch {
         reply.status(400).send({ error: "Group creation failed" });
