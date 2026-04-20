@@ -1,9 +1,10 @@
 import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
+import { findEventWithAccess } from "../lib/access.js";
 
 function formatPoll(poll: {
   id: number;
-  group_id: number | null;
+  event_id: number | null;
   user_id: number | null;
   question: string | null;
   created_at: Date | null;
@@ -14,7 +15,7 @@ function formatPoll(poll: {
 }) {
   return {
     id: poll.id,
-    groupId: poll.group_id,
+    eventId: poll.event_id,
     userId: poll.user_id,
     question: poll.question,
     createdAt: poll.created_at,
@@ -29,23 +30,18 @@ function formatPoll(poll: {
 }
 
 export async function pollRoutes(app: FastifyInstance) {
-  app.post("/groups/:groupId/polls", async (request, reply) => {
-    const groupId = Number((request.params as { groupId: string }).groupId);
-    const { userId, question, options, expiresAt, allowsMultiple } = request.body as {
-      userId: number;
+  app.post("/events/:eventId/polls", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const eventId = Number((request.params as { eventId: string }).eventId);
+    const userId = request.user.userId;
+    const { question, options, expiresAt, allowsMultiple } = request.body as {
       question: string;
       options: string[];
       expiresAt?: string;
       allowsMultiple?: boolean;
     };
 
-    if (!Number.isInteger(groupId) || groupId <= 0) {
-      return reply.status(400).send({ error: "Invalid groupId" });
-    }
-
-    if (!Number.isInteger(userId) || userId <= 0) {
-      return reply.status(400).send({ error: "Invalid userId" });
-    }
+    const event = await findEventWithAccess(eventId, userId);
+    if (!event) return reply.status(404).send({ error: "Event not found" });
 
     if (!question || question.trim().length === 0) {
       return reply.status(400).send({ error: "Question is required" });
@@ -72,7 +68,7 @@ export async function pollRoutes(app: FastifyInstance) {
     try {
       const poll = await prisma.polls.create({
         data: {
-          group_id: groupId,
+          event_id: eventId,
           user_id: userId,
           question: question.trim(),
           created_at: new Date(),
@@ -103,16 +99,16 @@ export async function pollRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/groups/:groupId/polls", async (request, reply) => {
-    const groupId = Number((request.params as { groupId: string }).groupId);
+  app.get("/events/:eventId/polls", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const eventId = Number((request.params as { eventId: string }).eventId);
+    const userId = request.user.userId;
 
-    if (!Number.isInteger(groupId) || groupId <= 0) {
-      return reply.status(400).send({ error: "Invalid groupId" });
-    }
+    const event = await findEventWithAccess(eventId, userId);
+    if (!event) return reply.status(404).send({ error: "Event not found" });
 
     try {
       const polls = await prisma.polls.findMany({
-        where: { group_id: groupId },
+        where: { event_id: eventId },
         orderBy: { id: "desc" },
         include: {
           options: true,
@@ -138,8 +134,9 @@ export async function pollRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/polls/:pollId/results", async (request, reply) => {
+  app.get("/polls/:pollId/results", { preHandler: [app.authenticate] }, async (request, reply) => {
     const pollId = Number((request.params as { pollId: string }).pollId);
+    const userId = request.user.userId;
 
     if (!Number.isInteger(pollId) || pollId <= 0) {
       return reply.status(400).send({ error: "Invalid pollId" });
@@ -162,6 +159,10 @@ export async function pollRoutes(app: FastifyInstance) {
         return reply.status(404).send({ error: "Poll not found" });
       }
 
+      if (!poll.event_id || !(await findEventWithAccess(poll.event_id, userId))) {
+        return reply.status(403).send({ error: "Forbidden" });
+      }
+
       return {
         pollId: poll.id,
         question: poll.question,
@@ -182,19 +183,15 @@ export async function pollRoutes(app: FastifyInstance) {
     }
   });
 
-  app.post("/polls/:pollId/votes", async (request, reply) => {
+  app.post("/polls/:pollId/votes", { preHandler: [app.authenticate] }, async (request, reply) => {
     const pollId = Number((request.params as { pollId: string }).pollId);
-    const { userId, optionId } = request.body as {
-      userId: number;
+    const userId = request.user.userId;
+    const { optionId } = request.body as {
       optionId: number;
     };
 
     if (!Number.isInteger(pollId) || pollId <= 0) {
       return reply.status(400).send({ error: "Invalid pollId" });
-    }
-
-    if (!Number.isInteger(userId) || userId <= 0) {
-      return reply.status(400).send({ error: "Invalid userId" });
     }
 
     if (!Number.isInteger(optionId) || optionId <= 0) {
@@ -211,6 +208,10 @@ export async function pollRoutes(app: FastifyInstance) {
 
       if (!poll) {
         return reply.status(404).send({ error: "Poll not found" });
+      }
+
+      if (!poll.event_id || !(await findEventWithAccess(poll.event_id, userId))) {
+        return reply.status(403).send({ error: "Forbidden" });
       }
 
       const validOption = poll.options.find((option) => option.id === optionId);
