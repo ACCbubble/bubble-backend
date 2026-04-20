@@ -12,6 +12,8 @@ export const ATTRIBUTE_DEFS = [
 
 export const EMOJI_TYPE_SEEDS = [
   { name: 'coming', emoji: '✅', description: 'User is coming to the event', defaultScore: 0.0 },
+  { name: 'not_coming', emoji: '❌', description: 'User is not coming to the event', defaultScore: 0.0 },
+  { name: 'maybe', emoji: '❓', description: 'User might come to the event', defaultScore: 0.0 },
   { name: 'needs_ride', emoji: '🚗', description: 'User needs a ride to the event', defaultScore: 0.0 },
   { name: 'bringing_food', emoji: '🍕', description: 'User is bringing food to the event', defaultScore: 0.0 },
 ]
