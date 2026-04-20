@@ -6,7 +6,7 @@ export interface PollOptionRecord {
 
 export interface PollRecord {
   id: number
-  group_id: number | null
+  event_id: number | null
   user_id: number | null
   question: string | null
   created_at: Date | null
@@ -50,7 +50,7 @@ export function formatPollState(poll: PollRecord, viewerUserId?: number | null) 
 
   return {
     id: poll.id,
-    groupId: poll.group_id,
+    eventId: poll.event_id,
     userId: poll.user_id,
     question: poll.question,
     createdAt: poll.created_at,

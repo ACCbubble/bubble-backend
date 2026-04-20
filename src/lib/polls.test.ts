@@ -21,7 +21,7 @@ test("normalizeVoteSelection rejects multiple ids for single-select polls", () =
 test("formatPollState exposes viewer selections and percentages", () => {
   const state = formatPollState({
     id: 7,
-    group_id: 1,
+    event_id: 1,
     user_id: 12,
     question: "Who can bring snacks?",
     created_at: new Date("2026-04-20T10:00:00Z"),

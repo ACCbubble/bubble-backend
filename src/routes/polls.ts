@@ -3,85 +3,142 @@ import { prisma } from "../lib/prisma.js";
 import { contextBus } from "../lib/contextBroadcast.js";
 import { formatPollState, normalizeVoteSelection } from "../lib/polls.js";
 
+interface CreatePollPayload {
+  userId: number;
+  question: string;
+  options: string[];
+  expiresAt?: string;
+  allowsMultiple?: boolean;
+}
+
+interface NormalizedPollPayload {
+  userId: number;
+  question: string;
+  options: string[];
+  parsedExpiresAt: Date | null;
+  allowsMultiple: boolean;
+}
+
+async function getPrimaryEventId(groupId: number): Promise<number | null> {
+  const event = await prisma.event.findFirst({
+    where: { groupId },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  return event?.id ?? null;
+}
+
+function normalizePollPayload(payload: CreatePollPayload): { error: string } | { value: NormalizedPollPayload } {
+  if (!Number.isInteger(payload.userId) || payload.userId <= 0) {
+    return { error: "Invalid userId" } as const;
+  }
+
+  if (!payload.question || payload.question.trim().length === 0) {
+    return { error: "Question is required" } as const;
+  }
+
+  if (
+    !Array.isArray(payload.options) ||
+    payload.options.length < 2 ||
+    payload.options.some((option) => typeof option !== "string" || option.trim().length === 0)
+  ) {
+    return { error: "Options must be an array of at least 2 non-empty strings" } as const;
+  }
+
+  let parsedExpiresAt: Date | null = null;
+  if (payload.expiresAt) {
+    parsedExpiresAt = new Date(payload.expiresAt);
+    if (Number.isNaN(parsedExpiresAt.getTime())) {
+      return { error: "expiresAt must be a valid date" } as const;
+    }
+  }
+
+  return {
+    value: {
+      userId: payload.userId,
+      question: payload.question.trim(),
+      options: payload.options.map((option) => option.trim()),
+      parsedExpiresAt,
+      allowsMultiple: payload.allowsMultiple ?? false,
+    },
+  } as const;
+}
+
+type PollWithVotes = Awaited<ReturnType<typeof prisma.polls.findUnique>>;
+
+async function loadPollState(pollId: number, viewerUserId?: number) {
+  const poll = await prisma.polls.findUnique({
+    where: { id: pollId },
+    include: {
+      options: {
+        include: {
+          votes: true,
+        },
+      },
+    },
+  });
+
+  if (!poll) return null;
+  return formatPollState(poll, viewerUserId);
+}
+
+async function createPollForEvent(
+  eventId: number,
+  payload: CreatePollPayload,
+): Promise<{ error: string } | { pollId: number; pollState: Awaited<ReturnType<typeof loadPollState>> }> {
+  const normalized = normalizePollPayload(payload);
+  if ("error" in normalized) return normalized;
+
+  const created = await prisma.polls.create({
+    data: {
+      event_id: eventId,
+      user_id: normalized.value.userId,
+      question: normalized.value.question,
+      created_at: new Date(),
+      expires_at: normalized.value.parsedExpiresAt,
+      is_active: true,
+      allows_multiple: normalized.value.allowsMultiple,
+      options: {
+        create: normalized.value.options.map((optionText) => ({ option_text: optionText })),
+      },
+    },
+    select: { id: true },
+  });
+
+  await prisma.message.create({
+    data: {
+      eventId,
+      senderId: normalized.value.userId,
+      content: `[AUTO_POLL:${created.id}] ${normalized.value.question}`,
+    },
+  });
+
+  contextBus.emit("poll_updated", { eventId, pollId: created.id });
+
+  const pollState = await loadPollState(created.id, normalized.value.userId);
+  return { pollId: created.id, pollState } as const;
+}
+
 export async function pollRoutes(app: FastifyInstance) {
-  app.post("/groups/:groupId/polls", async (request, reply) => {
-    const groupId = Number((request.params as { groupId: string }).groupId);
-    const { userId, question, options, expiresAt, allowsMultiple } = request.body as {
-      userId: number;
-      question: string;
-      options: string[];
-      expiresAt?: string;
-      allowsMultiple?: boolean;
-    };
+  app.post("/events/:eventId/polls", async (request, reply) => {
+    const eventId = Number((request.params as { eventId: string }).eventId);
+    const payload = request.body as CreatePollPayload;
 
-    if (!Number.isInteger(groupId) || groupId <= 0) {
-      return reply.status(400).send({ error: "Invalid groupId" });
-    }
-
-    if (!Number.isInteger(userId) || userId <= 0) {
-      return reply.status(400).send({ error: "Invalid userId" });
-    }
-
-    if (!question || question.trim().length === 0) {
-      return reply.status(400).send({ error: "Question is required" });
-    }
-
-    if (
-      !Array.isArray(options) ||
-      options.length < 2 ||
-      options.some((option) => typeof option !== "string" || option.trim().length === 0)
-    ) {
-      return reply.status(400).send({
-        error: "Options must be an array of at least 2 non-empty strings",
-      });
-    }
-
-    let parsedExpiresAt: Date | null = null;
-    if (expiresAt) {
-      parsedExpiresAt = new Date(expiresAt);
-      if (Number.isNaN(parsedExpiresAt.getTime())) {
-        return reply.status(400).send({ error: "expiresAt must be a valid date" });
-      }
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return reply.status(400).send({ error: "Invalid eventId" });
     }
 
     try {
-      const poll = await prisma.polls.create({
-        data: {
-          group_id: groupId,
-          user_id: userId,
-          question: question.trim(),
-          created_at: new Date(),
-          expires_at: parsedExpiresAt,
-          is_active: true,
-          allows_multiple: allowsMultiple ?? false,
-          options: {
-            create: options.map((optionText) => ({ option_text: optionText.trim() })),
-          },
-        },
-        include: {
-          options: {
-            include: {
-              votes: true,
-            },
-          },
-        },
-      });
-
-      await prisma.message.create({
-        data: {
-          groupId,
-          senderId: userId,
-          content: `[AUTO_POLL:${poll.id}] ${poll.question}`,
-        },
-      });
-
-      contextBus.emit("poll_updated", { groupId, pollId: poll.id });
+      const result = await createPollForEvent(eventId, payload);
+      if ("error" in result) {
+        return reply.status(400).send({ error: result.error });
+      }
 
       return reply.status(201).send({
         status: "OK",
-        pollId: poll.id,
-        results: `/polls/${poll.id}/results`,
-        poll: formatPollState(poll, userId),
+        pollId: result.pollId,
+        results: `/polls/${result.pollId}/results`,
+        poll: result.pollState,
       });
     } catch (error) {
       app.log.error(error);
@@ -92,16 +149,52 @@ export async function pollRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get("/groups/:groupId/polls", async (request, reply) => {
+  app.post("/groups/:groupId/polls", async (request, reply) => {
     const groupId = Number((request.params as { groupId: string }).groupId);
+    const payload = request.body as CreatePollPayload;
 
     if (!Number.isInteger(groupId) || groupId <= 0) {
       return reply.status(400).send({ error: "Invalid groupId" });
     }
 
+    const eventId = await getPrimaryEventId(groupId);
+    if (!eventId) {
+      return reply.status(404).send({ error: "No event found for group" });
+    }
+
+    try {
+      const result = await createPollForEvent(eventId, payload);
+      if ("error" in result) {
+        return reply.status(400).send({ error: result.error });
+      }
+
+      return reply.status(201).send({
+        status: "OK",
+        pollId: result.pollId,
+        results: `/polls/${result.pollId}/results`,
+        poll: result.pollState,
+      });
+    } catch (error) {
+      app.log.error(error);
+      return reply.status(400).send({
+        error: "Poll creation failed",
+        details: String(error),
+      });
+    }
+  });
+
+  app.get("/events/:eventId/polls", async (request, reply) => {
+    const eventId = Number((request.params as { eventId: string }).eventId);
+    const { userId } = request.query as { userId?: string };
+    const viewerUserId = userId ? Number(userId) : undefined;
+
+    if (!Number.isInteger(eventId) || eventId <= 0) {
+      return reply.status(400).send({ error: "Invalid eventId" });
+    }
+
     try {
       const polls = await prisma.polls.findMany({
-        where: { group_id: groupId },
+        where: { event_id: eventId },
         orderBy: { id: "desc" },
         include: {
           options: {
@@ -112,7 +205,38 @@ export async function pollRoutes(app: FastifyInstance) {
         },
       });
 
-      return polls.map((poll) => formatPollState(poll));
+      return polls.map((poll) => formatPollState(poll, viewerUserId));
+    } catch (error) {
+      app.log.error(error);
+      return reply.status(400).send({ error: "Failed to fetch polls" });
+    }
+  });
+
+  app.get("/groups/:groupId/polls", async (request, reply) => {
+    const groupId = Number((request.params as { groupId: string }).groupId);
+    const { userId } = request.query as { userId?: string };
+    const viewerUserId = userId ? Number(userId) : undefined;
+
+    if (!Number.isInteger(groupId) || groupId <= 0) {
+      return reply.status(400).send({ error: "Invalid groupId" });
+    }
+
+    try {
+      const events = await prisma.event.findMany({ where: { groupId }, select: { id: true } });
+      const eventIds = events.map((event) => event.id);
+      const polls = await prisma.polls.findMany({
+        where: { event_id: { in: eventIds } },
+        orderBy: { id: "desc" },
+        include: {
+          options: {
+            include: {
+              votes: true,
+            },
+          },
+        },
+      });
+
+      return polls.map((poll) => formatPollState(poll, viewerUserId));
     } catch (error) {
       app.log.error(error);
       return reply.status(400).send({ error: "Failed to fetch polls" });
@@ -129,22 +253,13 @@ export async function pollRoutes(app: FastifyInstance) {
     }
 
     try {
-      const poll = await prisma.polls.findUnique({
-        where: { id: pollId },
-        include: {
-          options: {
-            include: {
-              votes: true,
-            },
-          },
-        },
-      });
+      const poll = await loadPollState(pollId, viewerUserId);
 
       if (!poll) {
         return reply.status(404).send({ error: "Poll not found" });
       }
 
-      return formatPollState(poll, viewerUserId);
+      return poll;
     } catch (error) {
       app.log.error(error);
       return reply.status(400).send({ error: "Failed to fetch poll results" });
@@ -187,20 +302,20 @@ export async function pollRoutes(app: FastifyInstance) {
         return reply.status(400).send({ error: "Poll has expired" });
       }
 
-      let selectedOptionIds: number[]
+      let selectedOptionIds: number[];
       try {
         selectedOptionIds = normalizeVoteSelection({
           allowsMultiple: Boolean(poll.allows_multiple),
           optionId,
           optionIds,
-        })
+        });
       } catch (error) {
-        return reply.status(400).send({ error: (error as Error).message })
+        return reply.status(400).send({ error: (error as Error).message });
       }
 
       const invalidOptionId = selectedOptionIds.find(
         (selectedId) => !poll.options.some((option) => option.id === selectedId),
-      )
+      );
       if (invalidOptionId) {
         return reply.status(400).send({ error: "Option does not belong to this poll" });
       }
@@ -247,22 +362,11 @@ export async function pollRoutes(app: FastifyInstance) {
         ),
       ]);
 
-      contextBus.emit("poll_updated", { groupId: poll.group_id, pollId });
-
-      const updatedPoll = await prisma.polls.findUnique({
-        where: { id: pollId },
-        include: {
-          options: {
-            include: {
-              votes: true,
-            },
-          },
-        },
-      });
+      contextBus.emit("poll_updated", { eventId: poll.event_id, pollId });
 
       return {
         status: "OK",
-        poll: updatedPoll ? formatPollState(updatedPoll, userId) : null,
+        poll: await loadPollState(pollId, userId),
         results: `/polls/${pollId}/results`,
       };
     } catch (error) {
