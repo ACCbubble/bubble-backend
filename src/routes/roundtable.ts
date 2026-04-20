@@ -39,7 +39,7 @@ export async function roundtableRoutes(app: FastifyInstance) {
         const evidence = await prisma.messageContextEvidence.findMany({
           where: {
             emojiTypeId: { not: null },
-            message: { groupId: gid, senderId: m.userId },
+            message: { event: { groupId: gid }, senderId: m.userId },
           },
           include: { message: { select: { createdAt: true } } },
         })
