@@ -113,3 +113,11 @@ contextBus.on("message_created", ({ groupId, message }: { groupId: number; messa
     if (ws.readyState === WebSocket.OPEN) ws.send(payload);
   });
 });
+
+contextBus.on("poll_updated", ({ groupId, pollId }: { groupId: number | null; pollId: number }) => {
+  if (!groupId) return;
+  const payload = JSON.stringify({ type: "poll_updated", groupId, pollId });
+  connections.get(groupId)?.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+  });
+});

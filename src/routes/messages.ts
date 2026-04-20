@@ -2,19 +2,21 @@ import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
 import { PollDraft, processMessageContext } from "../lib/context.js";
 import { contextBus } from "../lib/contextBroadcast.js";
+import { formatPollState } from "../lib/polls.js";
 
 const AUTO_POLL_PREFIX = "[AUTO_POLL:";
 
-function parseAutoPollId(content: string): number | null {
+function parsePollMessageId(content: string): number | null {
   const match = content.match(/^\[AUTO_POLL:(\d+)\]/);
   if (!match) return null;
   return Number(match[1]);
 }
 
-async function createAutoPollAndChainMessage(input: {
+async function createPollAndChainMessage(input: {
   groupId: number;
   senderId: number;
   draft: PollDraft;
+  isAutoPoll: boolean;
 }) {
   const poll = await prisma.polls.create({
     data: {
@@ -48,18 +50,37 @@ async function createAutoPollAndChainMessage(input: {
     groupId: input.groupId,
     message: {
       ...pollMessage,
-      poll: {
-        id: poll.id,
-        question: poll.question,
-        allowsMultiple: poll.allows_multiple,
-        options: poll.options.map((option) => ({
-          id: option.id,
-          optionText: option.option_text,
-        })),
-      },
-      isAutoPoll: true,
+      poll: formatPollState({
+        ...poll,
+        options: poll.options.map((option) => ({ ...option, votes: [] })),
+      }),
+      isAutoPoll: input.isAutoPoll,
     },
   });
+
+  return poll;
+}
+
+async function buildPollMessageMap(input: {
+  pollIds: number[];
+  viewerUserId?: number;
+}) {
+  if (input.pollIds.length === 0) return new Map<number, ReturnType<typeof formatPollState>>();
+
+  const polls = await prisma.polls.findMany({
+    where: { id: { in: input.pollIds } },
+    include: {
+      options: {
+        include: {
+          votes: true,
+        },
+      },
+    },
+  });
+
+  return new Map(
+    polls.map((poll) => [poll.id, formatPollState(poll, input.viewerUserId)]),
+  );
 }
 
 export async function messageRoutes(app: FastifyInstance) {
@@ -95,10 +116,11 @@ export async function messageRoutes(app: FastifyInstance) {
       processMessageContext(message.id, message.senderId, message.groupId, message.content)
         .then(async (pollDraft) => {
           if (!pollDraft) return;
-          await createAutoPollAndChainMessage({
+          await createPollAndChainMessage({
             groupId: message.groupId,
             senderId: message.senderId,
             draft: pollDraft,
+            isAutoPoll: true,
           });
         })
         .catch(() => {});
@@ -137,6 +159,15 @@ export async function messageRoutes(app: FastifyInstance) {
       },
     });
 
+    const pollIds = messages
+      .map((message) => parsePollMessageId(message.content))
+      .filter((pollId): pollId is number => Number.isInteger(pollId));
+
+    const pollById = await buildPollMessageMap({
+      pollIds,
+      viewerUserId: uid,
+    });
+
     const LAMBDA = Math.LN2 / 48; // 48h half-life for recency
     function recency(createdAt: Date) {
       return Math.exp(-LAMBDA * (Date.now() - createdAt.getTime()) / 3_600_000);
@@ -158,7 +189,17 @@ export async function messageRoutes(app: FastifyInstance) {
         relevanceScore += emojiRelevance(ev.emojiType.name) * ev.confidence * recency(msg.createdAt);
       }
       const { contextEvidence: _, ...rest } = msg;
-      return { ...rest, relevanceScore };
+      const pollId = parsePollMessageId(msg.content);
+      const poll = pollId ? pollById.get(pollId) : null;
+
+      if (!poll) return { ...rest, relevanceScore };
+
+      return {
+        ...rest,
+        relevanceScore,
+        isAutoPoll: true,
+        poll,
+      };
     });
 
     scored.sort((a, b) => b.relevanceScore - a.relevanceScore);
@@ -171,6 +212,8 @@ export async function messageRoutes(app: FastifyInstance) {
   // Fetch all messages for a group
   app.get("/groups/:id/messages", async (request, reply) => {
     const groupId = Number((request.params as { id: string }).id);
+    const { viewerUserId } = request.query as { viewerUserId?: string };
+    const parsedViewerUserId = viewerUserId ? Number(viewerUserId) : undefined;
 
     try {
       const messages = await prisma.message.findMany({
@@ -182,20 +225,16 @@ export async function messageRoutes(app: FastifyInstance) {
       });
 
       const pollIds = messages
-        .map((message) => parseAutoPollId(message.content))
+        .map((message) => parsePollMessageId(message.content))
         .filter((pollId): pollId is number => Number.isInteger(pollId));
 
-      const polls = pollIds.length === 0
-        ? []
-        : await prisma.polls.findMany({
-            where: { id: { in: pollIds } },
-            include: { options: true },
-          });
-
-      const pollById = new Map(polls.map((poll) => [poll.id, poll]));
+      const pollById = await buildPollMessageMap({
+        pollIds,
+        viewerUserId: parsedViewerUserId,
+      });
 
       return messages.map((message) => {
-        const pollId = parseAutoPollId(message.content);
+        const pollId = parsePollMessageId(message.content);
         const poll = pollId ? pollById.get(pollId) : null;
 
         if (!poll) return message;
@@ -203,18 +242,7 @@ export async function messageRoutes(app: FastifyInstance) {
         return {
           ...message,
           isAutoPoll: true,
-          poll: {
-            id: poll.id,
-            question: poll.question,
-            createdAt: poll.created_at,
-            expiresAt: poll.expires_at,
-            isActive: poll.is_active,
-            allowsMultiple: poll.allows_multiple,
-            options: poll.options.map((option) => ({
-              id: option.id,
-              optionText: option.option_text,
-            })),
-          },
+          poll,
         };
       });
     } catch (error) {
