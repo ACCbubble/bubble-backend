@@ -23,18 +23,33 @@ function computeEmojiScore(evidences: Array<{ confidence: number; createdAt: Dat
 }
 
 export async function roundtableRoutes(app: FastifyInstance) {
-  // GET /roundtable?eventId=X
   app.get('/roundtable', { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { eventId } = request.query as { eventId?: string }
-    if (!eventId) return reply.status(400).send({ error: 'eventId required' })
-    const eid = Number(eventId)
+    const { eventId, groupId } = request.query as { eventId?: string; groupId?: string }
+    if (!eventId && !groupId) {
+      return reply.status(400).send({ error: 'eventId or groupId required' })
+    }
 
-    // Get the event to find its group
-    const event = await prisma.event.findUnique({ where: { id: eid } })
-    if (!event) return reply.status(404).send({ error: 'Event not found' })
+    let eid: number | null = null
+    let gid: number
+
+    if (eventId) {
+      eid = Number(eventId)
+      if (!Number.isInteger(eid) || eid <= 0) {
+        return reply.status(400).send({ error: 'Invalid eventId' })
+      }
+
+      const event = await prisma.event.findUnique({ where: { id: eid } })
+      if (!event) return reply.status(404).send({ error: 'Event not found' })
+      gid = event.groupId
+    } else {
+      gid = Number(groupId)
+      if (!Number.isInteger(gid) || gid <= 0) {
+        return reply.status(400).send({ error: 'Invalid groupId' })
+      }
+    }
 
     const members = await prisma.groupMember.findMany({
-      where: { groupId: event.groupId },
+      where: { groupId: gid },
       include: { user: { select: { id: true, name: true } } },
     })
 
@@ -43,7 +58,9 @@ export async function roundtableRoutes(app: FastifyInstance) {
         const evidence = await prisma.messageContextEvidence.findMany({
           where: {
             emojiTypeId: { not: null },
-            message: { eventId: eid, senderId: m.userId },
+            message: eid
+              ? { eventId: eid, senderId: m.userId }
+              : { event: { groupId: gid }, senderId: m.userId },
           },
           include: { message: { select: { createdAt: true } } },
         })
@@ -83,12 +100,10 @@ export async function roundtableRoutes(app: FastifyInstance) {
     return { members: memberData }
   })
 
-  // GET /emoji-types — no auth, static reference data
   app.get('/emoji-types', async () => {
     return prisma.emojiType.findMany({ select: { id: true, name: true, emoji: true } })
   })
 
-  // GET /attributes?userId=X
   app.get('/attributes', { preHandler: [app.authenticate] }, async (request, reply) => {
     const { userId } = request.query as { userId?: string }
     if (!userId) return reply.status(400).send({ error: 'userId required' })
