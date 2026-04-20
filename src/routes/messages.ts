@@ -2,10 +2,12 @@ import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
 import { PollDraft, processMessageContext } from "../lib/context.js";
 import { contextBus } from "../lib/contextBroadcast.js";
+import { formatPollState } from "../lib/polls.js";
+import { createPollForEvent } from "../lib/pollWorkflows.js";
 
 const AUTO_POLL_PREFIX = "[AUTO_POLL:";
 
-function parseAutoPollId(content: string): number | null {
+function parsePollMessageId(content: string): number | null {
   const match = content.match(/^\[AUTO_POLL:(\d+)\]/);
   if (!match) return null;
   return Number(match[1]);
@@ -30,44 +32,39 @@ async function createAutoPollAndChainMessage(input: {
   eventId: number;
   senderId: number;
   draft: PollDraft;
+  isAutoPoll: boolean;
 }) {
-  const poll = await prisma.polls.create({
-    data: {
-      event_id: input.eventId,
-      user_id: input.senderId,
-      question: input.draft.question,
-      created_at: new Date(),
-      is_active: true,
-      allows_multiple: input.draft.allowsMultiple,
-      options: {
-        create: input.draft.options.map((optionText) => ({ option_text: optionText })),
-      },
-    },
-    include: { options: true },
-  });
-
-  const pollMessage = await prisma.message.create({
-    data: {
-      eventId: input.eventId,
-      senderId: input.senderId,
-      content: `${AUTO_POLL_PREFIX}${poll.id}] ${input.draft.question}`,
-    },
-    include: { sender: { select: { id: true, name: true } } },
-  });
-
-  contextBus.emit("message_created", {
+  return createPollForEvent({
     eventId: input.eventId,
-    message: {
-      ...pollMessage,
-      poll: {
-        id: poll.id,
-        question: poll.question,
-        allowsMultiple: poll.allows_multiple,
-        options: poll.options.map((option) => ({ id: option.id, optionText: option.option_text })),
+    userId: input.senderId,
+    question: input.draft.question,
+    allowsMultiple: input.draft.allowsMultiple,
+    allowsSuggestions: true,
+    options: input.draft.options.map((optionText) => ({ optionText })),
+    isAutoPoll: input.isAutoPoll,
+  });
+}
+
+async function buildPollMessageMap(input: {
+  pollIds: number[];
+  viewerUserId?: number;
+}) {
+  if (input.pollIds.length === 0) return new Map<number, ReturnType<typeof formatPollState>>();
+
+  const polls = await prisma.polls.findMany({
+    where: { id: { in: input.pollIds } },
+    include: {
+      options: {
+        include: {
+          votes: true,
+        },
       },
-      isAutoPoll: true,
     },
   });
+
+  return new Map(
+    polls.map((poll) => [poll.id, formatPollState(poll, input.viewerUserId)]),
+  );
 }
 
 async function fetchFeedMessagesByEvent(eventId: number) {
@@ -102,7 +99,27 @@ async function fetchFeedMessagesByGroup(groupId: number) {
 
 type FeedMessage = Awaited<ReturnType<typeof fetchFeedMessagesByEvent>>[number];
 
-function scoreFeedMessages(messages: FeedMessage[], attrMap: Record<string, number>, viewerName: string) {
+async function enrichFeedMessages(messages: FeedMessage[], viewerUserId?: number) {
+  const pollIds = messages
+    .map((message) => parsePollMessageId(message.content))
+    .filter((pollId): pollId is number => Number.isInteger(pollId));
+
+  const pollById = await buildPollMessageMap({ pollIds, viewerUserId });
+
+  return messages.map((message) => {
+    const pollId = parsePollMessageId(message.content);
+    const poll = pollId ? pollById.get(pollId) : null;
+    if (!poll) return message;
+
+    return {
+      ...message,
+      isAutoPoll: true,
+      poll,
+    };
+  });
+}
+
+function scoreFeedMessages(messages: Awaited<ReturnType<typeof enrichFeedMessages>>, attrMap: Record<string, number>, viewerName: string) {
   const LAMBDA = Math.LN2 / 48;
 
   function recency(createdAt: Date) {
@@ -119,6 +136,17 @@ function scoreFeedMessages(messages: FeedMessage[], attrMap: Record<string, numb
 
     if (message.content.includes("?")) {
       score += 0.3;
+    }
+
+    // Polls the viewer has voted on rank high — they're engaged with it
+    if ("poll" in message && message.poll) {
+      const poll = message.poll as { isActive: boolean; viewerVoteOptionIds: number[] };
+      if (poll.viewerVoteOptionIds.length > 0) {
+        score += 2.5;
+      } else if (poll.isActive) {
+        // Active polls the viewer hasn't voted on yet are also surfaced prominently
+        score += 1.0;
+      }
     }
 
     for (const relevance of message.viewerRelevance) {
@@ -161,41 +189,22 @@ async function fetchTimelineMessagesByGroup(groupId: number) {
 
 type TimelineMessage = Awaited<ReturnType<typeof fetchTimelineMessagesByEvent>>[number];
 
-async function attachPolls(messages: TimelineMessage[]) {
+async function attachPolls(messages: TimelineMessage[], viewerUserId?: number) {
   const pollIds = messages
-    .map((message) => parseAutoPollId(message.content))
+    .map((message) => parsePollMessageId(message.content))
     .filter((id): id is number => Number.isInteger(id));
 
-  const polls =
-    pollIds.length === 0
-      ? []
-      : await prisma.polls.findMany({
-          where: { id: { in: pollIds } },
-          include: { options: true },
-        });
-
-  const pollById = new Map(polls.map((poll) => [poll.id, poll]));
+  const pollById = await buildPollMessageMap({ pollIds, viewerUserId });
 
   return messages.map((message) => {
-    const pollId = parseAutoPollId(message.content);
+    const pollId = parsePollMessageId(message.content);
     const poll = pollId ? pollById.get(pollId) : null;
     if (!poll) return message;
 
     return {
       ...message,
       isAutoPoll: true,
-      poll: {
-        id: poll.id,
-        question: poll.question,
-        createdAt: poll.created_at,
-        expiresAt: poll.expires_at,
-        isActive: poll.is_active,
-        allowsMultiple: poll.allows_multiple,
-        options: poll.options.map((option) => ({
-          id: option.id,
-          optionText: option.option_text,
-        })),
-      },
+      poll,
     };
   });
 }
@@ -245,6 +254,7 @@ export async function messageRoutes(app: FastifyInstance) {
             eventId: event.id,
             senderId: message.senderId,
             draft: pollDraft,
+            isAutoPoll: true,
           });
         })
         .catch(() => {});
@@ -269,7 +279,8 @@ export async function messageRoutes(app: FastifyInstance) {
     for (const attr of attrs) attrMap[attr.key] = attr.score;
 
     const messages = await fetchFeedMessagesByEvent(eventId);
-    return scoreFeedMessages(messages, attrMap, viewerName);
+    const enriched = await enrichFeedMessages(messages, uid);
+    return scoreFeedMessages(enriched, attrMap, viewerName);
   });
 
   app.get("/groups/:id/feed", { preHandler: [app.authenticate] }, async (request, reply) => {
@@ -286,15 +297,18 @@ export async function messageRoutes(app: FastifyInstance) {
     for (const attr of attrs) attrMap[attr.key] = attr.score;
 
     const messages = await fetchFeedMessagesByGroup(groupId);
-    return scoreFeedMessages(messages, attrMap, viewerName);
+    const enriched = await enrichFeedMessages(messages, uid);
+    return scoreFeedMessages(enriched, attrMap, viewerName);
   });
 
   app.get("/events/:id/messages", async (request, reply) => {
     const eventId = Number((request.params as { id: string }).id);
+    const { viewerUserId } = request.query as { viewerUserId?: string };
+    const parsedViewerUserId = viewerUserId ? Number(viewerUserId) : undefined;
 
     try {
       const messages = await fetchTimelineMessagesByEvent(eventId);
-      return attachPolls(messages);
+      return attachPolls(messages, parsedViewerUserId);
     } catch {
       reply.status(400).send({ error: "Fetching messages failed" });
     }
@@ -302,10 +316,12 @@ export async function messageRoutes(app: FastifyInstance) {
 
   app.get("/groups/:id/messages", async (request, reply) => {
     const groupId = Number((request.params as { id: string }).id);
+    const { viewerUserId } = request.query as { viewerUserId?: string };
+    const parsedViewerUserId = viewerUserId ? Number(viewerUserId) : undefined;
 
     try {
       const messages = await fetchTimelineMessagesByGroup(groupId);
-      return attachPolls(messages);
+      return attachPolls(messages, parsedViewerUserId);
     } catch {
       reply.status(400).send({ error: "Fetching messages failed" });
     }

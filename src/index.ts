@@ -115,3 +115,11 @@ contextBus.on("message_created", ({ eventId, message }: { eventId: number; messa
     if (ws.readyState === WebSocket.OPEN) ws.send(payload);
   });
 });
+
+contextBus.on("poll_updated", ({ eventId, pollId }: { eventId: number | null; pollId: number }) => {
+  if (!eventId) return;
+  const payload = JSON.stringify({ type: "poll_updated", eventId, pollId });
+  connections.get(eventId)?.forEach(ws => {
+    if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+  });
+});
