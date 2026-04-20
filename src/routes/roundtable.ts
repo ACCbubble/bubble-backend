@@ -29,7 +29,7 @@ function quoteFromEvidence(evidence: { displayQuote: string; message: { content:
 }
 
 export async function roundtableRoutes(app: FastifyInstance) {
-  app.get('/roundtable', { preHandler: [app.authenticate] }, async (request, reply) => {
+  app.get('/roundtable', async (request, reply) => {
     const { eventId, groupId } = request.query as { eventId?: string; groupId?: string }
     if (!eventId && !groupId) {
       return reply.status(400).send({ error: 'eventId or groupId required' })
