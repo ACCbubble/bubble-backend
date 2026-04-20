@@ -39,6 +39,7 @@ async function createAutoPollAndChainMessage(input: {
     userId: input.senderId,
     question: input.draft.question,
     allowsMultiple: input.draft.allowsMultiple,
+    allowsSuggestions: true,
     options: input.draft.options.map((optionText) => ({ optionText })),
     isAutoPoll: input.isAutoPoll,
   });
@@ -135,6 +136,17 @@ function scoreFeedMessages(messages: Awaited<ReturnType<typeof enrichFeedMessage
 
     if (message.content.includes("?")) {
       score += 0.3;
+    }
+
+    // Polls the viewer has voted on rank high — they're engaged with it
+    if ("poll" in message && message.poll) {
+      const poll = message.poll as { isActive: boolean; viewerVoteOptionIds: number[] };
+      if (poll.viewerVoteOptionIds.length > 0) {
+        score += 2.5;
+      } else if (poll.isActive) {
+        // Active polls the viewer hasn't voted on yet are also surfaced prominently
+        score += 1.0;
+      }
     }
 
     for (const relevance of message.viewerRelevance) {

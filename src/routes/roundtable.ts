@@ -24,16 +24,8 @@ function computeEmojiScore(evidences: Array<{ confidence: number; createdAt: Dat
 
 function quoteFromEvidence(evidence: { displayQuote: string; message: { content: string } }) {
   const displayQuote = evidence.displayQuote.trim()
-  const messageContent = evidence.message.content.trim().replace(/\s+/g, ' ')
-  if (!displayQuote) return messageContent.slice(0, 100)
-
-  const quoteLower = displayQuote.toLowerCase()
-  const messageLower = messageContent.toLowerCase()
-  if (messageLower.includes(quoteLower)) {
-    return displayQuote
-  }
-
-  return messageContent.slice(0, 100)
+  if (displayQuote) return displayQuote
+  return evidence.message.content.trim().replace(/\s+/g, ' ').slice(0, 100)
 }
 
 export async function roundtableRoutes(app: FastifyInstance) {

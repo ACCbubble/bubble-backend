@@ -375,17 +375,23 @@ Group name: "${input.groupName}"
 Initial message: "${input.initialMessage}"
 
 Return JSON:
-{"extracted":{"name":string|null,"location":string|null,"eventTime":string|null,"description":string|null},"questionPolls":[{"question":string,"options":string[],"allowsMultiple":boolean}],"fieldPolls":[{"field":"name"|"location"|"eventTime"|"description","question":string,"options":[{"optionText":string,"optionValue":string}]}]}
+{"extracted":{"name":null,"location":string|null,"eventTime":string|null,"description":string|null},"questionPolls":[{"question":string,"options":string[],"allowsMultiple":boolean}],"fieldPolls":[{"field":"location"|"eventTime"|"description","question":string,"options":[{"optionText":string,"optionValue":string}]}]}
 
-Rules:
-- extracted.name/location/description should be null if the message does not clearly specify them.
-- extracted.eventTime must be ISO-8601 or null.
-- If the message mentions only a weekday like Friday, resolve it to the next upcoming matching date after Today.
-- questionPolls: create one poll for each distinct user-facing decision/question in the initial message. Multiple polls are allowed.
-- fieldPolls: for every missing field among name, location, eventTime, description, create exactly one poll with 2-4 realistic options.
-- For eventTime field polls, optionValue must be ISO-8601 and optionText should be a human-friendly label.
-- For other field polls, optionValue should equal the final chosen text.
-- Keep options concise and distinct.`,
+RULES:
+- extracted.name: ALWAYS null.
+- extracted.location: only if a specific place is explicitly named. Otherwise null.
+- extracted.eventTime: ISO-8601 if a specific date/time is clearly stated, otherwise null.
+- extracted.description: treat any named meal/activity as complete — "breakfast", "lunch", "dinner", "coffee", "bowling", "hiking", "movie" etc. are all specific enough. Only leave null for truly vague messages like "let's hang" or "get together" with no activity stated.
+- questionPolls: ONLY if message has a literal "?" with explicit choices listed by the user. Max 1. options:[] if no choices listed.
+- fieldPolls rules:
+  - NEVER field "name".
+  - Think about whether description and location polls are asking the same thing. For food/meal events (breakfast, lunch, dinner, coffee, drinks), if you would create BOTH a description poll and a location poll, DROP the description poll and keep only location — "where are we eating?" covers both. Do not ask "what are we eating?" when the person already said what (breakfast, lunch, etc.).
+  - description poll: only when extracted.description is null AND the activity is genuinely unknown. Write the question as a natural human asks it given the context — "What are we eating?", "What are we watching?", "What are we doing?" — never "How would you describe this event?". Always options:[].
+  - location poll: when extracted.location is null. options:[] unless specific places were named in the message.
+  - eventTime poll: when extracted.eventTime is null. options:[] unless specific times were stated. optionValue ISO-8601.
+  - Only create a poll if it adds real value — if the message already makes the answer obvious, skip it.
+- Do NOT invent options.
+- Use good judgment on how many polls to create — don't overwhelm, but don't skip genuinely useful ones.`,
       },
     ],
     response_format: { type: 'json_object' },
@@ -430,10 +436,20 @@ Rules:
     existingFields: new Set([...fieldPolls, ...promoted.fieldPolls].map((poll) => poll.field)),
   })
 
+  let allFieldPolls = [...fieldPolls, ...promoted.fieldPolls, ...fallbackFieldPolls]
+
+  // If both description and location polls exist for a meal/food event, drop description —
+  // "where are we eating?" already answers "what are we eating?"
+  const hasBoth = allFieldPolls.some(p => p.field === 'description') && allFieldPolls.some(p => p.field === 'location')
+  const isMealEvent = /\b(breakfast|lunch|dinner|brunch|coffee|drinks|tacos|pizza|sushi|food|eat|eating|meal)\b/i.test(input.initialMessage)
+  if (hasBoth && isMealEvent) {
+    allFieldPolls = allFieldPolls.filter(p => p.field !== 'description')
+  }
+
   return {
     extracted,
     questionPolls: promoted.questionPolls,
-    fieldPolls: [...fieldPolls, ...promoted.fieldPolls, ...fallbackFieldPolls],
+    fieldPolls: allFieldPolls,
   }
 }
 
@@ -558,7 +574,7 @@ function sanitizeIsoDateField(value: string | undefined) {
 function sanitizeSetupFieldPollDraft(
   poll: NonNullable<EventSetupResult['fieldPolls']>[number],
 ): SetupFieldPollDraft | null {
-  if (!poll?.field || !['name', 'location', 'eventTime', 'description'].includes(poll.field)) {
+  if (!poll?.field || !['location', 'eventTime', 'description'].includes(poll.field)) {
     return null
   }
 
@@ -583,8 +599,6 @@ function sanitizeSetupFieldPollDraft(
 
   const options = [...new Map<string, SetupPollOptionDraft>(optionEntries).values()].slice(0, 4)
 
-  if (options.length < 2) return null
-
   return {
     field: poll.field,
     question,
@@ -599,49 +613,53 @@ function buildFallbackSetupFieldPolls(input: {
   existingFields: Set<SetupFieldPollDraft['field']>
 }): SetupFieldPollDraft[] {
   const polls: SetupFieldPollDraft[] = []
-  const missingFields = (['name', 'location', 'eventTime', 'description'] as const)
+  // Never poll for name — the event creator already named it
+  const missingFields = (['location', 'eventTime', 'description'] as const)
     .filter((field) => !input.extracted[field] && !input.existingFields.has(field))
 
   for (const field of missingFields) {
-    if (field === 'name') {
-      polls.push({
-        field,
-        question: 'What should we call this plan?',
-        options: [
-          { optionText: input.groupName, optionValue: input.groupName },
-          { optionText: `${input.groupName} Plan`, optionValue: `${input.groupName} Plan` },
-          { optionText: `${input.groupName} Hangout`, optionValue: `${input.groupName} Hangout` },
-        ],
-      })
-    }
-
     if (field === 'location') {
+      // Only use locations explicitly named in the message — no invented options
       polls.push({
         field,
         question: 'Where should this happen?',
-        options: [
-          { optionText: 'Student Center', optionValue: 'Student Center' },
-          { optionText: 'Downtown', optionValue: 'Downtown' },
-          { optionText: 'Campus Lawn', optionValue: 'Campus Lawn' },
-        ],
+        options: [],
       })
     }
 
     if (field === 'eventTime') {
-      const timeOptions = buildFallbackEventTimeOptions(input.initialMessage)
+      // Only use times the user explicitly mentioned; don't invent fallback times
+      const times = extractClockTimes(input.initialMessage)
+      const weekday = extractUpcomingWeekday(input.initialMessage)
+      const options: SetupPollOptionDraft[] = []
+      if (weekday && times.length > 0) {
+        for (const time of times.slice(0, 3)) {
+          const iso = combineDateAndTime(weekday, time)
+          const label = new Date(iso).toLocaleString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+          })
+          options.push({ optionText: label, optionValue: iso })
+        }
+      }
       polls.push({
         field,
         question: 'When should this happen?',
-        options: timeOptions,
+        options,
       })
     }
 
     if (field === 'description') {
-      polls.push({
-        field,
-        question: 'What kind of plan is this?',
-        options: buildFallbackDescriptionOptions(input.initialMessage),
-      })
+      // No pre-seeded options — members suggest their own. Ask something relevant.
+      const lower = input.initialMessage.toLowerCase()
+      let question = 'What are we doing?'
+      if (/\b(breakfast|brunch|lunch|dinner|food|eat|eating|restaurant|tacos|pizza|sushi|meal)\b/.test(lower)) question = 'What are we eating?'
+      else if (/\b(drinks|bar|beer|wine|cocktails)\b/.test(lower)) question = 'Where are we going for drinks?'
+      else if (/\b(coffee|cafe)\b/.test(lower)) question = 'Where are we grabbing coffee?'
+      else if (/\b(hike|hiking|trail|outdoors)\b/.test(lower)) question = 'Where are we hiking?'
+      else if (/\b(movie|film|theatre|theater)\b/.test(lower)) question = 'What are we watching?'
+      else if (/\b(game|gaming|board game|cards|poker)\b/.test(lower)) question = 'What are we playing?'
+      polls.push({ field, question, options: [] })
     }
   }
 
@@ -684,7 +702,6 @@ function detectPollField(poll: PollDraft): SetupFieldPollDraft['field'] | null {
   const question = poll.question.toLowerCase()
   const optionBlob = poll.options.join(' ').toLowerCase()
 
-  if (/\b(name|call|title)\b/.test(question)) return 'name'
   if (/\b(where|location|venue)\b/.test(question)) return 'location'
   if (/\b(when|time|start|date)\b/.test(question)) return 'eventTime'
   if (/\b(activity|plan|do)\b/.test(question)) return 'description'
@@ -711,7 +728,6 @@ function toSetupFieldPollDraft(
   }
 
   const options = poll.options.map((optionText) => ({ optionText, optionValue: optionText }))
-  if (options.length < 2) return null
   return { field, question: poll.question, options }
 }
 

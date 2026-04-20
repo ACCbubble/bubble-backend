@@ -10,6 +10,7 @@ interface CreatePollPayload {
   options: string[];
   expiresAt?: string;
   allowsMultiple?: boolean;
+  setupField?: "name" | "location" | "eventTime" | "description" | null;
 }
 
 interface NormalizedPollPayload {
@@ -103,6 +104,7 @@ export async function pollRoutes(app: FastifyInstance) {
         options: normalized.value.options.map((optionText) => ({ optionText })),
         allowsMultiple: normalized.value.allowsMultiple,
         expiresAt: normalized.value.parsedExpiresAt,
+        setupField: payload.setupField ?? null,
         isAutoPoll: false,
       });
 
@@ -147,6 +149,7 @@ export async function pollRoutes(app: FastifyInstance) {
         options: normalized.value.options.map((optionText) => ({ optionText })),
         allowsMultiple: normalized.value.allowsMultiple,
         expiresAt: normalized.value.parsedExpiresAt,
+        setupField: payload.setupField ?? null,
         isAutoPoll: false,
       });
 
@@ -355,6 +358,56 @@ export async function pollRoutes(app: FastifyInstance) {
     } catch (error) {
       app.log.error(error);
       return reply.status(400).send({ error: "Vote submission failed" });
+    }
+  });
+
+  app.post("/polls/:pollId/suggestions", async (request, reply) => {
+    const pollId = Number((request.params as { pollId: string }).pollId);
+    const { userId, optionText } = request.body as { userId: number; optionText: string };
+
+    if (!Number.isInteger(pollId) || pollId <= 0) {
+      return reply.status(400).send({ error: "Invalid pollId" });
+    }
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return reply.status(400).send({ error: "Invalid userId" });
+    }
+    const trimmed = typeof optionText === "string" ? optionText.trim() : "";
+    if (!trimmed) {
+      return reply.status(400).send({ error: "optionText is required" });
+    }
+
+    try {
+      const poll = await prisma.polls.findUnique({ where: { id: pollId } });
+      if (!poll) return reply.status(404).send({ error: "Poll not found" });
+      if (!poll.allows_suggestions) return reply.status(400).send({ error: "Poll does not allow suggestions" });
+      if (poll.is_active === false) return reply.status(400).send({ error: "Poll is no longer active" });
+      if (poll.expires_at && new Date(poll.expires_at) < new Date()) {
+        return reply.status(400).send({ error: "Poll has expired" });
+      }
+
+      // Create the option then immediately vote for it
+      const option = await prisma.options.create({
+        data: { poll_id: pollId, option_text: trimmed, option_value: trimmed },
+      });
+
+      // Remove any existing votes by this user on this poll then cast for the new option
+      await prisma.$transaction([
+        prisma.votes.deleteMany({ where: { poll_id: pollId, user_id: userId } }),
+        prisma.votes.create({
+          data: { poll_id: pollId, user_id: userId, option_id: option.id, created_at: new Date() },
+        }),
+      ]);
+
+      await syncEventFieldFromPollWinner(pollId);
+      contextBus.emit("poll_updated", { eventId: poll.event_id, pollId });
+
+      return {
+        status: "OK",
+        poll: await loadPollState(pollId, userId),
+      };
+    } catch (error) {
+      app.log.error(error);
+      return reply.status(400).send({ error: "Suggestion failed" });
     }
   });
 }

@@ -168,9 +168,10 @@ model polls {
   question        String?
   created_at      DateTime? @db.Timestamptz(6)
   expires_at      DateTime? @db.Timestamptz(6)
-  is_active       Boolean?
-  allows_multiple Boolean?
-  setup_field     String?
+  is_active           Boolean?
+  allows_multiple     Boolean?
+  setup_field         String?
+  allows_suggestions  Boolean?  @default(false)
 
   options options[]
   events  Event?    @relation(fields: [event_id], references: [id], onDelete: NoAction, onUpdate: NoAction)

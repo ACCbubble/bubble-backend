@@ -13,6 +13,7 @@ export interface CreateEventPollInput {
   question: string;
   options: PollOptionInput[];
   allowsMultiple?: boolean;
+  allowsSuggestions?: boolean;
   expiresAt?: Date | null;
   setupField?: "name" | "location" | "eventTime" | "description" | null;
   isAutoPoll?: boolean;
@@ -34,6 +35,7 @@ export async function createPollForEvent(input: CreateEventPollInput) {
       expires_at: input.expiresAt ?? null,
       is_active: true,
       allows_multiple: input.allowsMultiple ?? false,
+      allows_suggestions: input.allowsSuggestions ?? false,
       setup_field: input.setupField ?? null,
       options: {
         create: input.options.map((option) => ({

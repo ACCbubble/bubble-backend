@@ -13,6 +13,7 @@ export interface PollRecord {
   expires_at: Date | null
   is_active: boolean | null
   allows_multiple: boolean | null
+  allows_suggestions?: boolean | null
   options: PollOptionRecord[]
 }
 
@@ -58,6 +59,7 @@ export function formatPollState(poll: PollRecord, viewerUserId?: number | null) 
     isActive,
     isExpired,
     allowsMultiple: Boolean(poll.allows_multiple),
+    allowsSuggestions: Boolean(poll.allows_suggestions ?? false),
     totalVoters,
     viewerVoteOptionIds,
     options: poll.options.map((option) => {
