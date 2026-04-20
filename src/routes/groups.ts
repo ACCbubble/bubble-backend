@@ -3,7 +3,6 @@ import { prisma } from "../lib/prisma.js";
 import { addUserToGroup } from "./groupMembers.js";
 
 export async function groupRoutes(app: FastifyInstance) {
-  // POST /groups — creatorId comes from the JWT, not the request body
   app.post(
     "/groups",
     { preHandler: [app.authenticate] },
@@ -11,66 +10,56 @@ export async function groupRoutes(app: FastifyInstance) {
       const { name } = request.body as { name: string };
       const creatorId = request.user.userId;
 
+      if (!name || name.trim().length === 0) {
+        return reply.status(400).send({ error: "Group name is required" });
+      }
+
       try {
         const group = await prisma.group.create({
-          data: { creatorId, name },
+          data: { creatorId, name: name.trim() },
         });
         await addUserToGroup(creatorId, group.id, "owner");
-        return group;
+        return reply.status(201).send(group);
       } catch {
-        reply.status(400).send({ error: "Group creation failed" });
+        return reply.status(400).send({ error: "Group creation failed" });
       }
-    }
+    },
   );
 
-  // GET /groups — protected
-  app.get("/groups", { preHandler: [app.authenticate] }, async () => {
-    return prisma.group.findMany();
+  app.get("/groups", { preHandler: [app.authenticate] }, async (request) => {
+    const userId = request.user.userId;
+
+    return prisma.group.findMany({
+      where: {
+        groupMembers: {
+          some: { userId },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
   });
 
-  // GET /groups/:id — protected
   app.get(
     "/groups/:id",
     { preHandler: [app.authenticate] },
     async (request, reply) => {
       const id = Number((request.params as { id: string }).id);
-      const group = await prisma.group.findUnique({ where: { id } });
+      const userId = request.user.userId;
+
+      const group = await prisma.group.findFirst({
+        where: {
+          id,
+          groupMembers: {
+            some: { userId },
+          },
+        },
+      });
 
       if (!group) {
         return reply.status(404).send({ error: "Group not found" });
       }
 
       return group;
-    }
-  );
-
-  // PATCH /groups/:id — update event details
-  app.patch(
-    "/groups/:id",
-    { preHandler: [app.authenticate] },
-    async (request, reply) => {
-      const id = Number((request.params as { id: string }).id);
-      const { name, location, eventTime, description } = request.body as {
-        name?: string;
-        location?: string;
-        eventTime?: string;
-        description?: string;
-      };
-
-      try {
-        const group = await prisma.group.update({
-          where: { id },
-          data: {
-            ...(name !== undefined && { name }),
-            ...(location !== undefined && { location }),
-            ...(eventTime !== undefined && { eventTime: eventTime ? new Date(eventTime) : null }),
-            ...(description !== undefined && { description }),
-          },
-        });
-        return group;
-      } catch {
-        reply.status(400).send({ error: "Update failed" });
-      }
-    }
+    },
   );
 }

@@ -52,7 +52,7 @@ interface ClassificationResult {
 export async function processMessageContext(
   messageId: number,
   senderId: number,
-  groupId: number,
+  eventId: number,
   content: string,
 ): Promise<PollDraft | null> {
   try {
@@ -96,7 +96,7 @@ export async function processMessageContext(
       }
     }
 
-    contextBus.emit('context_updated', { groupId, userId: senderId })
+    contextBus.emit('context_updated', { eventId, userId: senderId })
     return sanitizePollDraft(result)
   } catch (err) {
     console.error('[context] processing failed:', err)

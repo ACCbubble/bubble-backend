@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import { prisma } from '../lib/prisma.js'
+import { findEventWithAccess } from '../lib/access.js'
 
 const HALF_LIFE_HOURS = 24
 const LAMBDA = Math.LN2 / HALF_LIFE_HOURS
@@ -23,14 +24,17 @@ function computeEmojiScore(evidences: Array<{ confidence: number; createdAt: Dat
 }
 
 export async function roundtableRoutes(app: FastifyInstance) {
-  // GET /roundtable?groupId=X
   app.get('/roundtable', { preHandler: [app.authenticate] }, async (request, reply) => {
-    const { groupId } = request.query as { groupId?: string }
-    if (!groupId) return reply.status(400).send({ error: 'groupId required' })
-    const gid = Number(groupId)
+    const { eventId } = request.query as { eventId?: string }
+    if (!eventId) return reply.status(400).send({ error: 'eventId required' })
+
+    const eid = Number(eventId)
+    const userId = request.user.userId
+    const event = await findEventWithAccess(eid, userId)
+    if (!event) return reply.status(404).send({ error: 'Event not found' })
 
     const members = await prisma.groupMember.findMany({
-      where: { groupId: gid },
+      where: { groupId: event.groupId },
       include: { user: { select: { id: true, name: true } } },
     })
 
@@ -39,12 +43,11 @@ export async function roundtableRoutes(app: FastifyInstance) {
         const evidence = await prisma.messageContextEvidence.findMany({
           where: {
             emojiTypeId: { not: null },
-            message: { groupId: gid, senderId: m.userId },
+            message: { eventId: eid, senderId: m.userId },
           },
           include: { message: { select: { createdAt: true } } },
         })
 
-        // Group by emojiTypeId
         const byEmoji = new Map<number, typeof evidence>()
         for (const ev of evidence) {
           if (!ev.emojiTypeId) continue
@@ -80,12 +83,10 @@ export async function roundtableRoutes(app: FastifyInstance) {
     return { members: memberData }
   })
 
-  // GET /emoji-types — no auth, static reference data
   app.get('/emoji-types', async () => {
     return prisma.emojiType.findMany({ select: { id: true, name: true, emoji: true } })
   })
 
-  // GET /attributes?userId=X
   app.get('/attributes', { preHandler: [app.authenticate] }, async (request, reply) => {
     const { userId } = request.query as { userId?: string }
     if (!userId) return reply.status(400).send({ error: 'userId required' })

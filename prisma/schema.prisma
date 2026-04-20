@@ -15,6 +15,7 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   createdGroups  Group[]         @relation("GroupCreator")
+  createdEvents  Event[]         @relation("EventCreator")
   groupMembers   GroupMember[]
   messages       Message[]       @relation("MessageSender")
   refreshTokens  RefreshToken[]
@@ -26,20 +27,34 @@ model User {
 }
 
 model Group {
+  id        Int      @id @default(autoincrement())
+  creatorId Int      @map("creator_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  name      String
+
+  creator      User          @relation("GroupCreator", fields: [creatorId], references: [id])
+  groupMembers GroupMember[]
+  events       Event[]
+
+  @@map("groups")
+}
+
+model Event {
   id          Int       @id @default(autoincrement())
+  groupId     Int       @map("group_id")
   creatorId   Int       @map("creator_id")
   createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  name        String?
+  name        String
   location    String?
   eventTime   DateTime? @map("event_time") @db.Timestamptz(6)
   description String?
 
-  creator      User          @relation("GroupCreator", fields: [creatorId], references: [id])
-  groupMembers GroupMember[]
-  messages     Message[]
-  polls        polls[]
+  group    Group     @relation(fields: [groupId], references: [id])
+  creator  User      @relation("EventCreator", fields: [creatorId], references: [id])
+  messages Message[]
+  polls    polls[]
 
-  @@map("groups")
+  @@map("events")
 }
 
 model GroupMember {
@@ -58,13 +73,13 @@ model GroupMember {
 
 model Message {
   id        Int      @id @default(autoincrement())
-  groupId   Int      @map("group_id")
+  eventId   Int      @map("event_id")
   senderId  Int      @map("sender_id")
   content   String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  group           Group                    @relation(fields: [groupId], references: [id])
-  sender          User                     @relation("MessageSender", fields: [senderId], references: [id])
+  event           Event                     @relation(fields: [eventId], references: [id])
+  sender          User                      @relation("MessageSender", fields: [senderId], references: [id])
   contextEvidence MessageContextEvidence[]
 
   @@map("messages")
@@ -133,7 +148,7 @@ model options {
 
 model polls {
   id              Int       @id @default(autoincrement())
-  group_id        Int?
+  event_id        Int?
   user_id         Int?
   question        String?
   created_at      DateTime? @db.Timestamptz(6)
@@ -141,7 +156,7 @@ model polls {
   is_active       Boolean?
   allows_multiple Boolean?
   options         options[]
-  groups          Group?    @relation(fields: [group_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  events          Event?    @relation(fields: [event_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   users           User?     @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   votes           votes[]
 }

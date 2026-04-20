@@ -2,6 +2,7 @@ import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
 import { PollDraft, processMessageContext } from "../lib/context.js";
 import { contextBus } from "../lib/contextBroadcast.js";
+import { findEventWithAccess } from "../lib/access.js";
 
 const AUTO_POLL_PREFIX = "[AUTO_POLL:";
 
@@ -12,13 +13,13 @@ function parseAutoPollId(content: string): number | null {
 }
 
 async function createAutoPollAndChainMessage(input: {
-  groupId: number;
+  eventId: number;
   senderId: number;
   draft: PollDraft;
 }) {
   const poll = await prisma.polls.create({
     data: {
-      group_id: input.groupId,
+      event_id: input.eventId,
       user_id: input.senderId,
       question: input.draft.question,
       created_at: new Date(),
@@ -35,7 +36,7 @@ async function createAutoPollAndChainMessage(input: {
 
   const pollMessage = await prisma.message.create({
     data: {
-      groupId: input.groupId,
+      eventId: input.eventId,
       senderId: input.senderId,
       content: `${AUTO_POLL_PREFIX}${poll.id}] ${poll.question}`,
     },
@@ -45,7 +46,7 @@ async function createAutoPollAndChainMessage(input: {
   });
 
   contextBus.emit("message_created", {
-    groupId: input.groupId,
+    eventId: input.eventId,
     message: {
       ...pollMessage,
       poll: {
@@ -63,40 +64,27 @@ async function createAutoPollAndChainMessage(input: {
 }
 
 export async function messageRoutes(app: FastifyInstance) {
+  app.post("/events/:id/messages", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const eventId = Number((request.params as { id: string }).id);
+    const senderId = request.user.userId;
+    const { content } = request.body as { content: string };
 
-  // ===============================
-  // SEND MESSAGE
-  // ===============================
-  // Creates a new message in a group (conversation)
-  app.post("/messages", async (request, reply) => {
-    const { groupId, senderId, content } = request.body as {
-      groupId: number;
-      senderId: number;
-      content: string;
-    };
+    const event = await findEventWithAccess(eventId, senderId);
+    if (!event) return reply.status(404).send({ error: "Event not found" });
 
     try {
       const message = await prisma.message.create({
-        data: { groupId, senderId, content },
+        data: { eventId, senderId, content },
         include: { sender: { select: { id: true, name: true } } },
       });
 
-      // Ensure sender is a group member (idempotent)
-      await prisma.groupMember.upsert({
-        where: { userId_groupId: { userId: senderId, groupId } },
-        update: {},
-        create: { userId: senderId, groupId, role: "member" },
-      });
+      contextBus.emit("message_created", { eventId, message });
 
-      // Broadcast new message to group WebSocket clients
-      contextBus.emit('message_created', { groupId, message })
-
-      // Fire context processing async — does not block the response
-      processMessageContext(message.id, message.senderId, message.groupId, message.content)
+      processMessageContext(message.id, message.senderId, message.eventId, message.content)
         .then(async (pollDraft) => {
           if (!pollDraft) return;
           await createAutoPollAndChainMessage({
-            groupId: message.groupId,
+            eventId: message.eventId,
             senderId: message.senderId,
             draft: pollDraft,
           });
@@ -104,29 +92,24 @@ export async function messageRoutes(app: FastifyInstance) {
         .catch(() => {});
 
       return message;
-    } catch (error) {
-      reply.status(400).send({ error: "Message creation failed" });
+    } catch {
+      return reply.status(400).send({ error: "Message creation failed" });
     }
   });
 
+  app.get("/events/:id/feed", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const eventId = Number((request.params as { id: string }).id);
+    const viewerId = request.user.userId;
 
-  // ===============================
-  // GET FEED (AI-sorted by viewer relevance)
-  // ===============================
-  // Returns messages sorted by relevance to a specific viewer based on their attributes.
-  // Relevance: high has_car → needs_ride signals matter; dietary restriction → bringing_food matters, etc.
-  app.get("/groups/:id/feed", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
-    const { userId } = request.query as { userId?: string };
-    if (!userId) return reply.status(400).send({ error: "userId required" });
-    const uid = Number(userId);
+    const event = await findEventWithAccess(eventId, viewerId);
+    if (!event) return reply.status(404).send({ error: "Event not found" });
 
-    const attrs = await prisma.userAttribute.findMany({ where: { userId: uid } });
+    const attrs = await prisma.userAttribute.findMany({ where: { userId: viewerId } });
     const attrMap: Record<string, number> = {};
     for (const a of attrs) attrMap[a.key] = a.score;
 
     const messages = await prisma.message.findMany({
-      where: { groupId },
+      where: { eventId },
       orderBy: { createdAt: "desc" },
       include: {
         sender: { select: { id: true, name: true } },
@@ -137,17 +120,21 @@ export async function messageRoutes(app: FastifyInstance) {
       },
     });
 
-    const LAMBDA = Math.LN2 / 48; // 48h half-life for recency
+    const LAMBDA = Math.LN2 / 48;
     function recency(createdAt: Date) {
-      return Math.exp(-LAMBDA * (Date.now() - createdAt.getTime()) / 3_600_000);
+      return Math.exp((-LAMBDA * (Date.now() - createdAt.getTime())) / 3_600_000);
     }
-    // Cross-relevance: how much does this emoji type matter to THIS viewer?
+
     function emojiRelevance(emojiName: string): number {
       switch (emojiName) {
-        case "needs_ride":    return attrMap["has_car"] ?? 0;
-        case "bringing_food": return attrMap["has_dietary_restriction"] ?? 0;
-        case "coming":        return 1.0;
-        default:              return 0.5;
+        case "needs_ride":
+          return attrMap["has_car"] ?? 0;
+        case "bringing_food":
+          return attrMap["has_dietary_restriction"] ?? 0;
+        case "coming":
+          return 1.0;
+        default:
+          return 0.5;
       }
     }
 
@@ -165,19 +152,19 @@ export async function messageRoutes(app: FastifyInstance) {
     return scored;
   });
 
-  // ===============================
-  // GET MESSAGES
-  // ===============================
-  // Fetch all messages for a group
-  app.get("/groups/:id/messages", async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
+  app.get("/events/:id/messages", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const eventId = Number((request.params as { id: string }).id);
+    const userId = request.user.userId;
+
+    const event = await findEventWithAccess(eventId, userId);
+    if (!event) return reply.status(404).send({ error: "Event not found" });
 
     try {
       const messages = await prisma.message.findMany({
-        where: { groupId },
+        where: { eventId },
         orderBy: { createdAt: "asc" },
         include: {
-          sender: true, // include sender info (name, etc.)
+          sender: true,
         },
       });
 
@@ -185,12 +172,13 @@ export async function messageRoutes(app: FastifyInstance) {
         .map((message) => parseAutoPollId(message.content))
         .filter((pollId): pollId is number => Number.isInteger(pollId));
 
-      const polls = pollIds.length === 0
-        ? []
-        : await prisma.polls.findMany({
-            where: { id: { in: pollIds } },
-            include: { options: true },
-          });
+      const polls =
+        pollIds.length === 0
+          ? []
+          : await prisma.polls.findMany({
+              where: { id: { in: pollIds } },
+              include: { options: true },
+            });
 
       const pollById = new Map(polls.map((poll) => [poll.id, poll]));
 
@@ -217,8 +205,8 @@ export async function messageRoutes(app: FastifyInstance) {
           },
         };
       });
-    } catch (error) {
-      reply.status(400).send({ error: "Fetching messages failed" });
+    } catch {
+      return reply.status(400).send({ error: "Fetching messages failed" });
     }
   });
 }
