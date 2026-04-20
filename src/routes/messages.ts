@@ -12,13 +12,14 @@ function parseAutoPollId(content: string): number | null {
 }
 
 async function createAutoPollAndChainMessage(input: {
+  eventId: number;
   groupId: number;
   senderId: number;
   draft: PollDraft;
 }) {
   const poll = await prisma.polls.create({
     data: {
-      group_id: input.groupId,
+      event_id: input.eventId,
       user_id: input.senderId,
       question: input.draft.question,
       created_at: new Date(),
@@ -35,7 +36,7 @@ async function createAutoPollAndChainMessage(input: {
 
   const pollMessage = await prisma.message.create({
     data: {
-      groupId: input.groupId,
+      eventId: input.eventId,
       senderId: input.senderId,
       content: `${AUTO_POLL_PREFIX}${poll.id}] ${poll.question}`,
     },
@@ -63,71 +64,46 @@ async function createAutoPollAndChainMessage(input: {
 }
 
 export async function messageRoutes(app: FastifyInstance) {
-
-  // ===============================
-  // SEND MESSAGE
-  // ===============================
-  // Creates a new message in a group (conversation)
+  // POST /messages
   app.post("/messages", async (request, reply) => {
-    const { groupId, senderId, content } = request.body as {
-      groupId: number;
+    const { eventId, senderId, content } = request.body as {
+      eventId: number;
       senderId: number;
       content: string;
     };
 
     try {
-      const message = await prisma.message.create({
-  data: { groupId, senderId, content },
-  include: { sender: { select: { id: true, name: true } } },
-});
+      const event = await prisma.event.findUnique({
+        where: { id: eventId },
+        select: { id: true, groupId: true },
+      });
 
-
-function classifyAttendance(text: string) {
-  const t = text.toLowerCase()
-
-  if (
-    t.includes("not coming") ||
-    t.includes("can't make it") ||
-    t.includes("i cant come")
-  ) return "not_coming"
-
-  if (
-    t.includes("maybe") ||
-    t.includes("not sure") ||
-    t.includes("might")
-  ) return "maybe"
-
-  if (
-    t.includes("coming") ||
-    t.includes("i'll be there") ||
-    t.includes("i will be there")
-  ) return "coming"
-
-  return null
-}
-
-const attendance = classifyAttendance(content)
-
-if (attendance) {
-  console.log("Detected attendance:", attendance)
-}
+      if (!event) {
+        return reply.status(404).send({ error: "Event not found" });
+      }
 
       // Ensure sender is a group member (idempotent)
       await prisma.groupMember.upsert({
-        where: { userId_groupId: { userId: senderId, groupId } },
+        where: { userId_groupId: { userId: senderId, groupId: event.groupId } },
         update: {},
-        create: { userId: senderId, groupId, role: "member" },
+        create: { userId: senderId, groupId: event.groupId, role: "member" },
+      });
+
+      const message = await prisma.message.create({
+        data: { eventId, senderId, content },
+        include: { sender: { select: { id: true, name: true } } },
       });
 
       // Broadcast new message to group WebSocket clients
-      contextBus.emit('message_created', { groupId, message })
+      contextBus.emit("message_created", { groupId: event.groupId, message });
 
       // Fire context processing async — does not block the response
-      processMessageContext(message.id, message.senderId, message.groupId, message.content)
+      processMessageContext(message.id, message.senderId, event.groupId, message.content)
         .then(async (pollDraft) => {
           if (!pollDraft) return;
           await createAutoPollAndChainMessage({
-            groupId: message.groupId,
+            eventId: message.eventId,
+            groupId: event.groupId,
             senderId: message.senderId,
             draft: pollDraft,
           });
@@ -135,19 +111,14 @@ if (attendance) {
         .catch(() => {});
 
       return message;
-    } catch (error) {
+    } catch {
       reply.status(400).send({ error: "Message creation failed" });
     }
   });
 
-
-  // ===============================
-  // GET FEED (AI-sorted by viewer relevance)
-  // ===============================
-  // Returns messages sorted by relevance to a specific viewer based on their attributes.
-  // Relevance: high has_car → needs_ride signals matter; dietary restriction → bringing_food matters, etc.
-  app.get("/groups/:id/feed", { preHandler: [app.authenticate] }, async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
+  // GET /events/:id/feed
+  app.get("/events/:id/feed", { preHandler: [app.authenticate] }, async (request, reply) => {
+    const eventId = Number((request.params as { id: string }).id);
     const { userId } = request.query as { userId?: string };
     if (!userId) return reply.status(400).send({ error: "userId required" });
     const uid = Number(userId);
@@ -157,7 +128,7 @@ if (attendance) {
     for (const a of attrs) attrMap[a.key] = a.score;
 
     const messages = await prisma.message.findMany({
-      where: { groupId },
+      where: { eventId },
       orderBy: { createdAt: "desc" },
       include: {
         sender: { select: { id: true, name: true } },
@@ -168,17 +139,21 @@ if (attendance) {
       },
     });
 
-    const LAMBDA = Math.LN2 / 48; // 48h half-life for recency
+    const LAMBDA = Math.LN2 / 48;
     function recency(createdAt: Date) {
-      return Math.exp(-LAMBDA * (Date.now() - createdAt.getTime()) / 3_600_000);
+      return Math.exp((-LAMBDA * (Date.now() - createdAt.getTime())) / 3_600_000);
     }
-    // Cross-relevance: how much does this emoji type matter to THIS viewer?
+
     function emojiRelevance(emojiName: string): number {
       switch (emojiName) {
-        case "needs_ride":    return attrMap["has_car"] ?? 0;
-        case "bringing_food": return attrMap["has_dietary_restriction"] ?? 0;
-        case "coming":        return 1.0;
-        default:              return 0.5;
+        case "needs_ride":
+          return attrMap["has_car"] ?? 0;
+        case "bringing_food":
+          return attrMap["has_dietary_restriction"] ?? 0;
+        case "coming":
+          return 1.0;
+        default:
+          return 0.5;
       }
     }
 
@@ -196,19 +171,16 @@ if (attendance) {
     return scored;
   });
 
-  // ===============================
-  // GET MESSAGES
-  // ===============================
-  // Fetch all messages for a group
-  app.get("/groups/:id/messages", async (request, reply) => {
-    const groupId = Number((request.params as { id: string }).id);
+  // GET /events/:id/messages
+  app.get("/events/:id/messages", async (request, reply) => {
+    const eventId = Number((request.params as { id: string }).id);
 
     try {
       const messages = await prisma.message.findMany({
-        where: { groupId },
+        where: { eventId },
         orderBy: { createdAt: "asc" },
         include: {
-          sender: true, // include sender info (name, etc.)
+          sender: true,
         },
       });
 
@@ -216,12 +188,13 @@ if (attendance) {
         .map((message) => parseAutoPollId(message.content))
         .filter((pollId): pollId is number => Number.isInteger(pollId));
 
-      const polls = pollIds.length === 0
-        ? []
-        : await prisma.polls.findMany({
-            where: { id: { in: pollIds } },
-            include: { options: true },
-          });
+      const polls =
+        pollIds.length === 0
+          ? []
+          : await prisma.polls.findMany({
+              where: { id: { in: pollIds } },
+              include: { options: true },
+            });
 
       const pollById = new Map(polls.map((poll) => [poll.id, poll]));
 
@@ -248,7 +221,7 @@ if (attendance) {
           },
         };
       });
-    } catch (error) {
+    } catch {
       reply.status(400).send({ error: "Fetching messages failed" });
     }
   });
