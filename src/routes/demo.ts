@@ -3,7 +3,7 @@ import bcrypt from "bcrypt";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ATTRIBUTE_DEFS, analyzeEventSetup } from "../lib/context.js";
+import { ATTRIBUTE_DEFS } from "../lib/context.js";
 import { createPollForEvent } from "../lib/pollWorkflows.js";
 
 const SALT_ROUNDS = 12;
@@ -55,8 +55,8 @@ export async function demoRoutes(app: FastifyInstance) {
     }
 
     const memberCount = await prisma.groupMember.count({ where: { groupId: demoGroup.id } });
-    if (memberCount >= 8) {
-      return reply.status(409).send({ error: "The demo is full (8 people max). Check back later!" });
+    if (memberCount >= 15) {
+      return reply.status(409).send({ error: "The demo is full (15 people max). Check back later!" });
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
@@ -154,20 +154,15 @@ export async function demoRoutes(app: FastifyInstance) {
     const group = await prisma.group.create({ data: { name: "Demo", creatorId: colinUser.id } });
     await prisma.groupMember.create({ data: { userId: colinUser.id, groupId: group.id, role: "admin" } });
 
-    const initialMessage = "Let's get dinner after this presentation";
-    let setupAnalysis;
-    try {
-      setupAnalysis = await analyzeEventSetup({ groupName: group.name, initialMessage });
-    } catch { /* non-fatal */ }
+    const initialMessage = "Thank you all so much for being a part of our Bubble team this semester and making it a memorable experience. We weren't always the best or most organized team but learning and failing and iterating together was what made this project and experience a success and rewarding. Thank you all again so much for just being here on this journey with us. We want to host one last bubble meetup this semester to thank you all and get you your T-shirts, and we thought the most fitting way to plan it would be no other way but on Bubble. - Colin and Andy";
 
     const event = await prisma.event.create({
       data: {
         groupId: group.id,
         creatorId: colinUser.id,
-        name: "Dinner",
-        ...(setupAnalysis?.extracted.location ? { location: setupAnalysis.extracted.location } : {}),
-        ...(setupAnalysis?.extracted.eventTime ? { eventTime: new Date(setupAnalysis.extracted.eventTime) } : {}),
-        ...(setupAnalysis?.extracted.description ? { description: setupAnalysis.extracted.description } : {}),
+        name: "Final Bubble Meetup",
+        location: "The Rev at Northgate Rooftop",
+        description: "Final Bubble Meeting",
       },
     });
 
@@ -182,24 +177,12 @@ export async function demoRoutes(app: FastifyInstance) {
       });
     }
 
-    if (setupAnalysis) {
-      for (const fp of setupAnalysis.fieldPolls) {
-        await createPollForEvent({
-          eventId: event.id, userId: colinUser.id,
-          question: fp.question, options: fp.options,
-          setupField: fp.field,
-          allowsSuggestions: fp.field === "description" || fp.options.length === 0,
-          isAutoPoll: true,
-        });
-      }
-      for (const qp of setupAnalysis.questionPolls) {
-        await createPollForEvent({
-          eventId: event.id, userId: colinUser.id,
-          question: qp.question, options: qp.options.map((o) => ({ optionText: o })),
-          allowsMultiple: qp.allowsMultiple, allowsSuggestions: true, isAutoPoll: true,
-        });
-      }
-    }
+    await createPollForEvent({
+      eventId: event.id, userId: colinUser.id,
+      question: "When should we meet?", options: [],
+      setupField: "eventTime",
+      allowsSuggestions: true, isAutoPoll: true,
+    });
 
     return { ok: true, groupId: group.id, eventId: event.id };
   });
