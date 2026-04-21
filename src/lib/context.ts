@@ -3,7 +3,7 @@ import { prisma } from './prisma.js'
 import { contextBus } from './contextBroadcast.js'
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-
+ 
 // ─── ATTRIBUTE DEFINITIONS ───────────────────────────────────────────────────
 // These represent persistent user profile signals inferred from messages.
 // defaultScore = prior probability before any evidence.
