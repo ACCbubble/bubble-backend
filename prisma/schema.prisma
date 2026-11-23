@@ -65,10 +65,24 @@ model Event {
 
   group    Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
   creator  User      @relation("EventCreator", fields: [creatorId], references: [id])
-  messages Message[]
-  polls    polls[]
+  messages      Message[]
+  conversations Conversation[]
+  polls         polls[]
 
   @@map("events")
+}
+
+// Groups related messages within the same event for AI processing.
+model Conversation {
+  id        Int      @id @default(autoincrement())
+  eventId   Int      @map("event_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  event    Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([eventId])
+  @@map("conversations")
 }
 
 model Message {
@@ -78,11 +92,20 @@ model Message {
   content   String
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
+  conversationId Int? @map("conversation_id")
+  replyToId      Int? @map("reply_to_id")
+
   event           Event                    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  conversation    Conversation?            @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  // A message can reply to one message and receive multiple replies.
+  replyTo         Message?                 @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies         Message[]                @relation("MessageReplies")
   sender          User                     @relation("MessageSender", fields: [senderId], references: [id])
   contextEvidence MessageContextEvidence[]
   viewerRelevance MessageViewerRelevance[]
 
+  @@index([conversationId])
+  @@index([replyToId])
   @@map("messages")
 }
 

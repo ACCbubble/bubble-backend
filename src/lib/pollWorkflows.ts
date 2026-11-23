@@ -1,4 +1,5 @@
 import { prisma } from "./prisma.js";
+import { createMessageWithConversation } from "./conversations.js";
 import { contextBus } from "./contextBroadcast.js";
 import { formatPollState } from "./polls.js";
 
@@ -53,13 +54,11 @@ export async function createPollForEvent(input: CreateEventPollInput) {
     },
   });
 
-  const pollMessage = await prisma.message.create({
-    data: {
-      eventId: input.eventId,
-      senderId: input.userId,
-      content: `[AUTO_POLL:${created.id}] ${created.question}`,
-    },
-    include: { sender: { select: { id: true, name: true } } },
+  // Poll announcements are chat messages too, so they need a conversation ID.
+  const pollMessage = await createMessageWithConversation({
+    eventId: input.eventId,
+    senderId: input.userId,
+    content: `[AUTO_POLL:${created.id}] ${created.question}`,
   });
 
   const pollState = formatPollState(created, input.userId);

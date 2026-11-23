@@ -1,9 +1,14 @@
+
 import { FastifyInstance } from "fastify";
 import { prisma } from "../lib/prisma.js";
 import { PollDraft, processMessageContext } from "../lib/context.js";
 import { contextBus } from "../lib/contextBroadcast.js";
 import { formatPollState } from "../lib/polls.js";
 import { createPollForEvent } from "../lib/pollWorkflows.js";
+import {
+  ConversationError,
+  createMessageWithConversation,
+} from "../lib/conversations.js";
 
 const AUTO_POLL_PREFIX = "[AUTO_POLL:";
 
@@ -211,11 +216,12 @@ async function attachPolls(messages: TimelineMessage[], viewerUserId?: number) {
 
 export async function messageRoutes(app: FastifyInstance) {
   app.post("/messages", async (request, reply) => {
-    const { eventId, groupId, senderId, content } = request.body as {
+    const { eventId, groupId, senderId, content, replyToId } = request.body as {
       eventId?: number;
       groupId?: number;
       senderId: number;
       content: string;
+      replyToId?: number;
     };
 
     const resolvedEventId =
@@ -224,19 +230,38 @@ export async function messageRoutes(app: FastifyInstance) {
       typeof groupId === "number" && Number.isInteger(groupId) && groupId > 0 ? groupId : null;
     const hasEventId = resolvedEventId !== null;
     const hasGroupId = resolvedGroupId !== null;
+
     if (!hasEventId && !hasGroupId) {
       return reply.status(400).send({ error: "eventId or groupId is required" });
+    }
+
+    // Reject invalid reply IDs before querying the database.
+    if (
+      replyToId !== undefined &&
+      (!Number.isInteger(replyToId) || replyToId <= 0)
+    ) {
+      return reply.status(400).send({
+        error: "replyToId must be a positive integer",
+      });
     }
 
     try {
       const event = hasEventId
         ? await getEventById(resolvedEventId as number)
         : await getPrimaryEvent(resolvedGroupId as number);
-      if (!event) return reply.status(404).send({ error: "No event found for the provided scope" });
 
-      const message = await prisma.message.create({
-        data: { eventId: event.id, senderId, content },
-        include: { sender: { select: { id: true, name: true } } },
+      if (!event) {
+        return reply.status(404).send({
+          error: "No event found for the provided scope",
+        });
+      }
+
+      // Assign a conversation and save the message in one transaction.
+      const message = await createMessageWithConversation({
+        eventId: event.id,
+        senderId,
+        content,
+        replyToId,
       });
 
       await prisma.groupMember.upsert({
@@ -260,8 +285,13 @@ export async function messageRoutes(app: FastifyInstance) {
         .catch(() => {});
 
       return message;
-    } catch {
-      reply.status(400).send({ error: "Message creation failed" });
+    } catch (error) {
+      if (error instanceof ConversationError) {
+        return reply.status(400).send({ error: error.message });
+      }
+
+      request.log.error(error, "Message creation failed");
+      return reply.status(400).send({ error: "Message creation failed" });
     }
   });
 
